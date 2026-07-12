@@ -1,41 +1,65 @@
-# 台股每月營收 · PEAD 掃描（MVP）
+# 台股每月營收 · PEAD 做多異常掃描
 
-用證交所 / 櫃買 OpenAPI 抓**最新一個月**上市、上櫃營收，寫入本機 SQLite，用網頁依月份檢視與簡單異常榜。
+抓取上市／上櫃每月營收，回補歷史，計算**只做多**異常訊號（極端成長 + 驚喜／轉折），網頁檢視並可下載 CSV。
 
 ## 快速開始
 
 ```bash
-cd /Users/pe/Downloads/twselistrev
+cd /path/to/202607twselistrev
 pip3 install -r requirements.txt
 python3 app.py
 ```
 
-瀏覽器開啟：<http://127.0.0.1:5050>
+開啟 <http://127.0.0.1:5050>
 
-## 功能
-
-| 功能 | 說明 |
-|------|------|
-| **抓取最新營收** | 呼叫上市 + 上櫃 API，upsert 進 `data/revenue.db` |
-| **選月份** | 檢視**已存入 DB** 的月份（官方 API 本身不提供歷史月份參數） |
-| **異常榜** | 全市場 YoY top/bottom；產業內百分位領先/落後 |
-| **全部資料** | 可篩市場 / 產業、欄位排序 |
-| **下載資料庫** | 下載 `revenue.db` 備份 |
+1. 按 **回補 24 個月歷史**（首次建議；約數分鐘）
+2. 或 **抓取最新營收**（OpenAPI + 缺邊用 MOPS 補齊）
+3. 在 **做多異常** 分頁看 E／S 名單，可下載 CSV
 
 ## 資料來源
 
-- 上市：`https://openapi.twse.com.tw/v1/opendata/t187ap05_L`
-- 上櫃：`https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O`
+| 來源 | 用途 |
+|------|------|
+| 證交所 OpenAPI `t187ap05_L` | 上市最新月 |
+| 櫃買 OpenAPI `mopsfin_t187ap05_O` | 上櫃最新月 |
+| 公開資訊觀測站 MOPS 彙總 HTML | 指定年月歷史、補齊雙市場 |
 
-> 官方 OpenAPI **只回傳最新月**。要累積歷史，請每月公告後按一次「抓取」；DB 會依 `(市場, 年月, 公司代號)` 累積多個月份。
+金額單位：**新台幣千元**。
 
-## SQLite 表
+## 做多異常（v1）
 
-`monthly_revenue`：營收金額、MoM%、YoY%、累計 YoY%、產業、備註、抓取時間等。
+### E · 極端成長
 
-## 異常規則（MVP）
+- 同產業 ≥ 5 家  
+- 產業內 YoY 百分位 ≥ 90  
+- YoY &gt; 0  
+- 當月營收 ≥ 門檻（預設 50,000 千元）
 
-1. **全市場**：YoY 最高 / 最低 30 名（可設最低營收過濾微型股）
-2. **產業內**：同產業 ≥ 5 家時，YoY 百分位 ≥ 90 或 ≤ 10
+### S · 驚喜／轉折（S1 + S2）
 
-後續可加：連續月加速、由負轉正、公告後股價反應等（PEAD 本體）。
+- **S1** 預期 = 同產業當月 YoY **中位數**；驚喜 = 實際 − S1  
+- **S2** 預期 = 該公司近 12 個月 YoY **中位數**（至少 6 個月歷史）；驚喜 = 實際 − S2  
+- 綜合驚喜平均 ≥ 15 百分點，或驚喜百分位 ≥ 85  
+- 或 **由負轉正**／**連兩月 YoY 加速**（且 YoY &gt; 0）
+
+**不做空。**
+
+## 主要 API
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| POST | `/api/fetch` | 最新月 + 補齊 |
+| POST | `/api/backfill` | 回補 N 個月（預設 24） |
+| GET | `/api/signals` | 做多異常 JSON |
+| GET | `/api/signals.csv` | 異常 CSV（`which=extreme_growth\|surprise_turnaround\|all_long`） |
+| GET | `/api/revenue` | 營收明細 |
+| GET | `/api/download-db` | 下載 SQLite |
+
+## 專案結構
+
+```
+app.py
+templates/index.html
+requirements.txt
+data/revenue.db   # 本機產生，不進 git
+```

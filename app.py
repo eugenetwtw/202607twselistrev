@@ -8,16 +8,19 @@
 
 from __future__ import annotations
 
+import csv
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import pandas as pd
 import requests
-from flask import Flask, g, jsonify, render_template, request, send_file
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -408,6 +411,376 @@ def ensure_both_markets(
         and result["after"].get("O", 0) >= min_count
     )
     return result
+
+
+def prev_year_month(year_month: str) -> str:
+    y, m = int(year_month[:4]), int(year_month[4:6])
+    m -= 1
+    if m == 0:
+        y -= 1
+        m = 12
+    return f"{y:04d}{m:02d}"
+
+
+def year_month_range_ending(end_ym: str, n_months: int) -> list[str]:
+    """含 end_ym 在內、往前共 n_months 個 YYYYMM（舊→新）。"""
+    cur = end_ym
+    out = [cur]
+    for _ in range(n_months - 1):
+        cur = prev_year_month(cur)
+        out.append(cur)
+    return list(reversed(out))
+
+
+def latest_data_year_month(db: sqlite3.Connection) -> str | None:
+    row = db.execute(
+        "SELECT year_month FROM monthly_revenue ORDER BY year_month DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def default_backfill_end_ym() -> str:
+    """預設回補終點：上個月（營收資料月）。"""
+    now = datetime.now()
+    y, m = now.year, now.month - 1
+    if m <= 0:
+        y -= 1
+        m = 12
+    return f"{y:04d}{m:02d}"
+
+
+def backfill_history(
+    db: sqlite3.Connection,
+    *,
+    months: int = 24,
+    end_ym: str | None = None,
+    sleep_s: float = 0.6,
+    skip_complete: bool = True,
+    min_count: int = 50,
+) -> dict[str, Any]:
+    """
+    從 MOPS 回補近 months 個月、上市+上櫃。
+    已齊月份預設跳過；force 式可 skip_complete=False。
+    """
+    end = end_ym or latest_data_year_month(db) or default_backfill_end_ym()
+    yms = year_month_range_ending(end, months)
+    steps: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for i, ym in enumerate(yms):
+        counts = market_counts(db, ym)
+        complete = counts.get("L", 0) >= min_count and counts.get("O", 0) >= min_count
+        if skip_complete and complete:
+            steps.append(
+                {
+                    "year_month": ym,
+                    "label": format_ym_display(ym),
+                    "skipped": True,
+                    "reason": "already_complete",
+                    "after": counts,
+                }
+            )
+            continue
+
+        # 兩邊都抓（缺才抓）；force 已齊時仍可不重抓
+        fr = ensure_both_markets(db, ym, min_count=min_count, force=False)
+        step = {
+            "year_month": ym,
+            "label": format_ym_display(ym),
+            "skipped": False,
+            "filled": fr["filled"],
+            "before": fr["before"],
+            "after": fr["after"],
+            "complete": fr["complete"],
+            "progress": f"{i + 1}/{len(yms)}",
+        }
+        if fr["errors"]:
+            step["errors"] = fr["errors"]
+            errors.extend(
+                {"year_month": ym, **e} for e in fr["errors"]
+            )
+        steps.append(step)
+        if sleep_s > 0 and i < len(yms) - 1:
+            time.sleep(sleep_s)
+
+    months_out = list_months(db)
+    complete_n = sum(1 for m in months_out if m["complete"])
+    return {
+        "end_ym": end,
+        "months_requested": months,
+        "year_months": yms,
+        "steps": steps,
+        "errors": errors,
+        "complete_months": complete_n,
+        "months": months_out,
+        "ok": len(errors) == 0,
+    }
+
+
+def _safe_median(vals: list[float]) -> float | None:
+    clean = [float(v) for v in vals if v is not None]
+    if not clean:
+        return None
+    return float(median(clean))
+
+
+def _percentile_rank(sorted_vals: list[float], value: float) -> float:
+    """0~100，值越大百分位越高。"""
+    n = len(sorted_vals)
+    if n <= 1:
+        return 50.0
+    # 有多少嚴格小於 value
+    less = sum(1 for x in sorted_vals if x < value)
+    equal = sum(1 for x in sorted_vals if x == value)
+    # mid-rank for ties
+    return 100.0 * (less + 0.5 * equal) / n
+
+
+def compute_long_signals(
+    db: sqlite3.Connection,
+    year_month: str,
+    *,
+    min_revenue: float = 50_000,
+    market: str | None = None,
+    # 極端成長
+    extreme_industry_pctile: float = 90.0,
+    extreme_min_yoy: float = 0.0,
+    # 驚喜：相對 S1/S2 的超出幅度（百分點）
+    surprise_min_pp: float = 15.0,
+    # 或落在 surprise 自身分布的高百分位
+    surprise_pctile_min: float = 85.0,
+    min_history_for_s2: int = 6,
+) -> dict[str, Any]:
+    """
+    只做多異常：
+    - E 極端成長：產業 YoY 百分位高 + YoY 為正 + 營收門檻
+    - S 驚喜/轉折：S1 產業中位、S2 自身近12月中位；轉折=由負轉正或連月加速
+    """
+    clauses = ["year_month = ?", "yoy_pct IS NOT NULL"]
+    params: list[Any] = [year_month]
+    if market in ("L", "O"):
+        clauses.append("market = ?")
+        params.append(market)
+    if min_revenue > 0:
+        clauses.append("revenue_current IS NOT NULL AND revenue_current >= ?")
+        params.append(min_revenue)
+
+    rows = [
+        dict(r)
+        for r in db.execute(
+            f"SELECT * FROM monthly_revenue WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchall()
+    ]
+    if not rows:
+        return {
+            "year_month": year_month,
+            "label": format_ym_display(year_month),
+            "universe": 0,
+            "extreme_growth": [],
+            "surprise_turnaround": [],
+            "all_long": [],
+            "params": {},
+        }
+
+    # --- S1: 產業當月 YoY 中位 ---
+    by_ind: dict[str, list[float]] = {}
+    for r in rows:
+        ind = r.get("industry") or "未分類"
+        by_ind.setdefault(ind, []).append(float(r["yoy_pct"]))
+    ind_median = {ind: _safe_median(vs) for ind, vs in by_ind.items()}
+    ind_sorted = {ind: sorted(vs) for ind, vs in by_ind.items()}
+
+    # --- 產業百分位 ---
+    for r in rows:
+        ind = r.get("industry") or "未分類"
+        r["industry_yoy_median"] = ind_median.get(ind)
+        r["industry_n"] = len(by_ind.get(ind, []))
+        r["industry_yoy_pctile"] = _percentile_rank(
+            ind_sorted.get(ind, [float(r["yoy_pct"])]), float(r["yoy_pct"])
+        )
+        # S1 surprise
+        em = r["industry_yoy_median"]
+        r["expected_yoy_s1"] = em
+        r["surprise_s1"] = (
+            float(r["yoy_pct"]) - em if em is not None else None
+        )
+
+    # --- S2: 自身近 12 個月 YoY 中位（不含當月）+ 上月 YoY（轉折）---
+    hist_yms = []
+    cur = year_month
+    for _ in range(12):
+        cur = prev_year_month(cur)
+        hist_yms.append(cur)
+    prev_ym = hist_yms[0] if hist_yms else None
+    prev2_ym = hist_yms[1] if len(hist_yms) > 1 else None
+
+    company_ids = [r["company_id"] for r in rows]
+    # 一次查出相關歷史
+    placeholders = ",".join("?" * len(hist_yms)) if hist_yms else "''"
+    id_ph = ",".join("?" * len(company_ids))
+    hist_map: dict[str, list[tuple[str, float | None]]] = {}
+    if hist_yms and company_ids:
+        q = f"""
+            SELECT company_id, year_month, yoy_pct
+            FROM monthly_revenue
+            WHERE year_month IN ({placeholders})
+              AND company_id IN ({id_ph})
+        """
+        for hr in db.execute(q, [*hist_yms, *company_ids]).fetchall():
+            hist_map.setdefault(hr["company_id"], []).append(
+                (hr["year_month"], hr["yoy_pct"])
+            )
+
+    for r in rows:
+        cid = r["company_id"]
+        series = hist_map.get(cid, [])
+        by_ym = {ym: yoy for ym, yoy in series}
+        hist_yoys = [
+            float(by_ym[ym])
+            for ym in hist_yms
+            if ym in by_ym and by_ym[ym] is not None
+        ]
+        r["hist_yoy_n"] = len(hist_yoys)
+        r["expected_yoy_s2"] = (
+            _safe_median(hist_yoys) if len(hist_yoys) >= min_history_for_s2 else None
+        )
+        if r["expected_yoy_s2"] is not None:
+            r["surprise_s2"] = float(r["yoy_pct"]) - r["expected_yoy_s2"]
+        else:
+            r["surprise_s2"] = None
+
+        r["prev_yoy"] = float(by_ym[prev_ym]) if prev_ym and prev_ym in by_ym and by_ym[prev_ym] is not None else None
+        r["prev2_yoy"] = (
+            float(by_ym[prev2_ym])
+            if prev2_ym and prev2_ym in by_ym and by_ym[prev2_ym] is not None
+            else None
+        )
+
+        # 轉折：由負轉正
+        r["is_turnaround"] = bool(
+            r["prev_yoy"] is not None
+            and r["prev_yoy"] < 0
+            and float(r["yoy_pct"]) > 0
+        )
+        # 連兩月加速（YoY 遞增）
+        r["is_accelerating"] = bool(
+            r["prev_yoy"] is not None
+            and r["prev2_yoy"] is not None
+            and float(r["yoy_pct"]) > r["prev_yoy"] > r["prev2_yoy"]
+        )
+
+        # 綜合 surprise：S1+S2 有則平均，否則用有的那個
+        s_parts = [x for x in (r["surprise_s1"], r["surprise_s2"]) if x is not None]
+        r["surprise_avg"] = sum(s_parts) / len(s_parts) if s_parts else None
+
+    # surprise 分布百分位（用 surprise_avg，缺則 s1）
+    surp_vals = []
+    for r in rows:
+        s = r["surprise_avg"] if r["surprise_avg"] is not None else r["surprise_s1"]
+        r["_surp_for_rank"] = s
+        if s is not None:
+            surp_vals.append(s)
+    surp_sorted = sorted(surp_vals)
+    for r in rows:
+        s = r["_surp_for_rank"]
+        r["surprise_pctile"] = (
+            _percentile_rank(surp_sorted, s) if s is not None and surp_sorted else None
+        )
+
+    # --- 標籤：只做多 ---
+    for r in rows:
+        yoy = float(r["yoy_pct"])
+        r["is_extreme_growth"] = bool(
+            yoy > extreme_min_yoy
+            and (r.get("industry_yoy_pctile") or 0) >= extreme_industry_pctile
+            and (r.get("industry_n") or 0) >= 5
+        )
+        s_ok = False
+        if r.get("surprise_avg") is not None and r["surprise_avg"] >= surprise_min_pp:
+            s_ok = True
+        if r.get("surprise_pctile") is not None and r["surprise_pctile"] >= surprise_pctile_min:
+            s_ok = True
+        # 轉折或加速也算驚喜/動能類做多訊號（需 YoY 為正）
+        if yoy > 0 and (r["is_turnaround"] or r["is_accelerating"]):
+            s_ok = True
+        r["is_surprise_long"] = bool(s_ok and yoy > extreme_min_yoy)
+
+        # 綜合分（做多）：百分位 + surprise 貢獻 + 轉折加成
+        score = 0.0
+        score += 0.45 * float(r.get("industry_yoy_pctile") or 0)
+        score += 0.35 * float(r.get("surprise_pctile") or 50)
+        if r["is_turnaround"]:
+            score += 12
+        if r["is_accelerating"]:
+            score += 8
+        if r["is_extreme_growth"]:
+            score += 5
+        r["anomaly_score"] = round(score, 2)
+        r["signal_types"] = []
+        if r["is_extreme_growth"]:
+            r["signal_types"].append("extreme_growth")
+        if r["is_surprise_long"]:
+            r["signal_types"].append("surprise_turnaround")
+
+    extreme = [r for r in rows if r["is_extreme_growth"]]
+    surprise = [r for r in rows if r["is_surprise_long"]]
+    all_long = [r for r in rows if r["is_extreme_growth"] or r["is_surprise_long"]]
+
+    extreme.sort(key=lambda x: (x.get("anomaly_score") or 0, x.get("yoy_pct") or 0), reverse=True)
+    surprise.sort(key=lambda x: (x.get("anomaly_score") or 0, x.get("surprise_avg") or 0), reverse=True)
+    all_long.sort(key=lambda x: (x.get("anomaly_score") or 0), reverse=True)
+
+    return {
+        "year_month": year_month,
+        "label": format_ym_display(year_month),
+        "universe": len(rows),
+        "extreme_growth": extreme,
+        "surprise_turnaround": surprise,
+        "all_long": all_long,
+        "params": {
+            "min_revenue": min_revenue,
+            "extreme_industry_pctile": extreme_industry_pctile,
+            "extreme_min_yoy": extreme_min_yoy,
+            "surprise_min_pp": surprise_min_pp,
+            "surprise_pctile_min": surprise_pctile_min,
+            "min_history_for_s2": min_history_for_s2,
+            "expected": "S1=產業當月YoY中位; S2=自身近12月YoY中位",
+            "direction": "long_only",
+        },
+    }
+
+
+def serialize_signal_row(r: dict) -> dict:
+    out = serialize_row(r)
+    for k in (
+        "industry_yoy_pctile",
+        "industry_yoy_median",
+        "industry_n",
+        "expected_yoy_s1",
+        "expected_yoy_s2",
+        "surprise_s1",
+        "surprise_s2",
+        "surprise_avg",
+        "surprise_pctile",
+        "prev_yoy",
+        "prev2_yoy",
+        "hist_yoy_n",
+        "anomaly_score",
+    ):
+        if k in r and r[k] is not None:
+            try:
+                out[k] = float(r[k])
+            except (TypeError, ValueError):
+                out[k] = r[k]
+        elif k in r:
+            out[k] = r[k]
+    out["is_extreme_growth"] = bool(r.get("is_extreme_growth"))
+    out["is_surprise_long"] = bool(r.get("is_surprise_long"))
+    out["is_turnaround"] = bool(r.get("is_turnaround"))
+    out["is_accelerating"] = bool(r.get("is_accelerating"))
+    out["signal_types"] = r.get("signal_types") or []
+    return out
 
 
 def upsert_rows(db: sqlite3.Connection, rows: list[dict]) -> int:
@@ -812,6 +1185,160 @@ def api_fill_month():
     )
 
 
+@app.post("/api/backfill")
+def api_backfill():
+    """
+    回補近 N 個月（預設 24）上市+上櫃歷史營收（MOPS）。
+    已齊月份預設跳過。可能需數分鐘。
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        months = int(body.get("months", 24))
+    except (TypeError, ValueError):
+        months = 24
+    months = max(1, min(months, 36))
+    end_ym = body.get("end_ym") or None
+    if end_ym is not None:
+        end_ym = str(end_ym).strip()
+        if not re.fullmatch(r"\d{6}", end_ym):
+            return jsonify({"error": "end_ym 須為 YYYYMM"}), 400
+    skip_complete = body.get("skip_complete", True)
+    try:
+        sleep_s = float(body.get("sleep_s", 0.6))
+    except (TypeError, ValueError):
+        sleep_s = 0.6
+
+    db = get_db()
+    result = backfill_history(
+        db,
+        months=months,
+        end_ym=end_ym,
+        sleep_s=sleep_s,
+        skip_complete=bool(skip_complete),
+    )
+    preferred = next((m["year_month"] for m in result["months"] if m["complete"]), None)
+    result["preferred_year_month"] = preferred
+    return jsonify(result)
+
+
+@app.get("/api/signals")
+def api_signals():
+    """做多異常：極端成長 + 驚喜/轉折（S1+S2）。"""
+    ym = request.args.get("year_month", "").strip()
+    if not ym:
+        return jsonify({"error": "缺少 year_month"}), 400
+    market = request.args.get("market") or None
+    try:
+        min_revenue = float(request.args.get("min_revenue", 50_000))
+    except ValueError:
+        min_revenue = 50_000
+
+    db = get_db()
+    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
+    return jsonify(
+        {
+            "year_month": raw["year_month"],
+            "label": raw["label"],
+            "universe": raw["universe"],
+            "params": raw["params"],
+            "counts": {
+                "extreme_growth": len(raw["extreme_growth"]),
+                "surprise_turnaround": len(raw["surprise_turnaround"]),
+                "all_long": len(raw["all_long"]),
+            },
+            "extreme_growth": [serialize_signal_row(r) for r in raw["extreme_growth"]],
+            "surprise_turnaround": [
+                serialize_signal_row(r) for r in raw["surprise_turnaround"]
+            ],
+            "all_long": [serialize_signal_row(r) for r in raw["all_long"]],
+        }
+    )
+
+
+@app.get("/api/signals.csv")
+def api_signals_csv():
+    """下載指定月份做多異常 CSV。"""
+    ym = request.args.get("year_month", "").strip()
+    if not ym:
+        return jsonify({"error": "缺少 year_month"}), 400
+    market = request.args.get("market") or None
+    which = request.args.get("which", "all_long")  # extreme_growth | surprise_turnaround | all_long
+    try:
+        min_revenue = float(request.args.get("min_revenue", 50_000))
+    except ValueError:
+        min_revenue = 50_000
+
+    db = get_db()
+    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
+    rows = raw.get(which) or raw["all_long"]
+
+    buf = StringIO()
+    fields = [
+        "year_month",
+        "company_id",
+        "company_name",
+        "market",
+        "industry",
+        "revenue_current",
+        "yoy_pct",
+        "mom_pct",
+        "industry_yoy_pctile",
+        "industry_yoy_median",
+        "expected_yoy_s1",
+        "expected_yoy_s2",
+        "surprise_s1",
+        "surprise_s2",
+        "surprise_avg",
+        "surprise_pctile",
+        "prev_yoy",
+        "is_turnaround",
+        "is_accelerating",
+        "is_extreme_growth",
+        "is_surprise_long",
+        "anomaly_score",
+        "signal_types",
+        "note",
+    ]
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(
+            {
+                "year_month": r.get("year_month"),
+                "company_id": r.get("company_id"),
+                "company_name": r.get("company_name"),
+                "market": r.get("market"),
+                "industry": r.get("industry"),
+                "revenue_current": r.get("revenue_current"),
+                "yoy_pct": r.get("yoy_pct"),
+                "mom_pct": r.get("mom_pct"),
+                "industry_yoy_pctile": r.get("industry_yoy_pctile"),
+                "industry_yoy_median": r.get("industry_yoy_median"),
+                "expected_yoy_s1": r.get("expected_yoy_s1"),
+                "expected_yoy_s2": r.get("expected_yoy_s2"),
+                "surprise_s1": r.get("surprise_s1"),
+                "surprise_s2": r.get("surprise_s2"),
+                "surprise_avg": r.get("surprise_avg"),
+                "surprise_pctile": r.get("surprise_pctile"),
+                "prev_yoy": r.get("prev_yoy"),
+                "is_turnaround": r.get("is_turnaround"),
+                "is_accelerating": r.get("is_accelerating"),
+                "is_extreme_growth": r.get("is_extreme_growth"),
+                "is_surprise_long": r.get("is_surprise_long"),
+                "anomaly_score": r.get("anomaly_score"),
+                "signal_types": "|".join(r.get("signal_types") or []),
+                "note": r.get("note"),
+            }
+        )
+
+    filename = f"signals_{ym}_{which}.csv"
+    return Response(
+        "\ufeff" + buf.getvalue(),  # BOM for Excel
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/download-db")
 def api_download_db():
     if not DB_PATH.exists():
@@ -840,7 +1367,10 @@ def api_status():
             "total_rows": total,
             "months": months,
             "apis": API_URLS,
-            "note": "官方 OpenAPI 僅提供最新一個月；選月份是檢視已寫入 DB 的資料。",
+            "note": (
+                "OpenAPI 僅最新月；歷史可用 /api/backfill 回補 24 個月。"
+                "異常訊號：極端成長 + S1/S2 驚喜轉折（只做多）。"
+            ),
         }
     )
 

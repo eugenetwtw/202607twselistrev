@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台股每月營收 · PEAD 掃描</title>
+  <title>台股每月營收 · PEAD 做多異常</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -16,6 +16,7 @@
       --accent-dim: #1e4a8a;
       --up: #3dd68c;
       --down: #f07178;
+      --warn: #e6b450;
       --radius: 10px;
       --font: "SF Pro Text", "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif;
       --mono: "SF Mono", "Menlo", "Consolas", monospace;
@@ -34,33 +35,8 @@
       border-bottom: 1px solid var(--border);
       background: linear-gradient(180deg, #152033 0%, var(--bg) 100%);
     }
-    header h1 {
-      margin: 0 0 0.25rem;
-      font-size: 1.35rem;
-      font-weight: 650;
-      letter-spacing: 0.02em;
-    }
-    header p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    /* 可排序表頭更明顯 */
-    th[data-sort] {
-      cursor: pointer;
-    }
-    th[data-sort]::after {
-      content: " ⇅";
-      opacity: 0.35;
-      font-size: 0.75em;
-    }
-    th[data-sort].sorted::after {
-      content: "";
-      opacity: 1;
-    }
-    th[data-sort].sorted {
-      color: var(--accent);
-    }
+    header h1 { margin: 0 0 0.25rem; font-size: 1.35rem; font-weight: 650; }
+    header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
     main {
       max-width: min(1680px, 98vw);
       margin: 0 auto;
@@ -75,7 +51,7 @@
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      margin-bottom: 1.15rem;
+      margin-bottom: 1rem;
     }
     .field {
       display: flex;
@@ -98,10 +74,6 @@
       font-size: 0.9rem;
       min-width: 160px;
     }
-    select:focus, input:focus {
-      outline: 2px solid var(--accent-dim);
-      border-color: var(--accent);
-    }
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -117,36 +89,58 @@
       padding: 0.55rem 1rem;
       font-size: 0.875rem;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
     }
-    button:hover:not(:disabled) {
-      background: #2c3c55;
-      border-color: #4a5d7a;
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    button:hover:not(:disabled) { background: #2c3c55; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     button.primary {
       background: var(--accent);
       border-color: #5a9dff;
       color: #fff;
       font-weight: 600;
     }
-    button.primary:hover:not(:disabled) {
-      background: #5a9dff;
-    }
-    button.ghost {
-      background: transparent;
+    button.ghost { background: transparent; }
+    button.warn {
+      background: #3d3420;
+      border-color: #8a7020;
+      color: var(--warn);
     }
     .status {
       font-size: 0.85rem;
       color: var(--muted);
-      padding: 0 0.25rem 0.9rem;
-      min-height: 1.5rem;
+      padding: 0 0.25rem 0.85rem;
+      min-height: 1.4rem;
+      white-space: pre-wrap;
     }
     .status.error { color: var(--down); }
     .status.ok { color: var(--up); }
+    .unit-note {
+      margin: 0 0 1rem;
+      padding: 0.75rem 1rem;
+      background: #1a2a1f;
+      border: 1px solid #2d5a3d;
+      border-radius: var(--radius);
+      color: #b8e0c8;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }
+    .unit-note strong { color: #7ddea3; }
+    .unit-note code {
+      font-family: var(--mono);
+      background: #0f1a14;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    .rule-note {
+      margin: 0 0 1rem;
+      padding: 0.75rem 1rem;
+      background: #1a2230;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+    .rule-note strong { color: var(--text); }
     .tabs {
       display: flex;
       gap: 0.4rem;
@@ -154,10 +148,7 @@
       border-bottom: 1px solid var(--border);
       padding-bottom: 0.55rem;
     }
-    .tabs button {
-      border-radius: 6px 6px 0 0;
-      border-bottom: none;
-    }
+    .tabs button { border-radius: 6px 6px 0 0; }
     .tabs button.active {
       background: var(--accent-dim);
       border-color: var(--accent);
@@ -168,27 +159,21 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       overflow: visible;
-      min-width: 0;
+      margin-bottom: 1.25rem;
     }
     .panel-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 1rem;
+      flex-wrap: wrap;
       padding: 0.85rem 1.1rem;
       border-bottom: 1px solid var(--border);
       font-size: 0.92rem;
     }
     .panel-head strong { font-weight: 600; }
-    .hint {
-      color: var(--muted);
-      font-size: 0.8rem;
-      flex-shrink: 0;
-    }
-    /* 不設內嵌捲軸：整頁捲動即可（避免雙垂直軸） */
-    .table-host {
-      overflow: visible;
-    }
+    .hint { color: var(--muted); font-size: 0.8rem; }
+    .table-host { overflow: visible; }
     table {
       width: max-content;
       min-width: 100%;
@@ -197,12 +182,12 @@
       font-size: 0.875rem;
     }
     th, td {
-      padding: 0.6rem 1rem;
+      padding: 0.55rem 0.9rem;
       text-align: right;
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
-      vertical-align: middle;
       font-variant-numeric: tabular-nums;
+      vertical-align: middle;
     }
     th {
       position: sticky;
@@ -210,71 +195,57 @@
       background: var(--panel2);
       color: var(--muted);
       font-weight: 600;
-      text-align: right;
       cursor: pointer;
       user-select: none;
       z-index: 2;
-      letter-spacing: 0.01em;
     }
     th:hover { color: var(--text); }
     th.sorted { color: var(--accent); }
     th.left, td.left { text-align: left; }
     tr:hover td { background: rgba(61, 139, 253, 0.06); }
-    td.col-name {
-      min-width: 4.5rem;
-      max-width: 8rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    td.col-industry {
-      min-width: 6rem;
-      max-width: 10rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
     .pos { color: var(--up); }
     .neg { color: var(--down); }
     .mono { font-family: var(--mono); font-size: 0.84rem; }
     .badge {
       display: inline-block;
-      padding: 0.15rem 0.45rem;
+      padding: 0.12rem 0.4rem;
       border-radius: 4px;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       background: var(--panel2);
       border: 1px solid var(--border);
     }
-    .badge.L { border-color: #3d8bfd55; color: #8ab4f8; }
-    .badge.O { border-color: #3dd68c55; color: #7ddea3; }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 1.5rem;
+    .badge.L { color: #8ab4f8; border-color: #3d8bfd55; }
+    .badge.O { color: #7ddea3; border-color: #3dd68c55; }
+    .tag {
+      display: inline-block;
+      margin-right: 0.25rem;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
     }
-    @media (min-width: 1400px) {
-      .grid-2 {
-        grid-template-columns: 1fr 1fr;
-        gap: 1.5rem;
-        align-items: start;
-      }
-    }
-    @media (max-width: 720px) {
-      .actions { margin-left: 0; width: 100%; }
-      th, td { padding: 0.5rem 0.7rem; }
-    }
+    .tag.e { background: #1e3a5f; color: #8ab4f8; }
+    .tag.s { background: #1e3f2a; color: #7ddea3; }
+    .tag.t { background: #3d3420; color: var(--warn); }
     .empty {
-      padding: 2.5rem 1rem;
+      padding: 2rem 1rem;
       text-align: center;
       color: var(--muted);
     }
-    .note-cell {
-      max-width: 160px;
+    .rev-cell { font-family: var(--mono); font-size: 0.84rem; }
+    .rev-cell .unit {
+      margin-left: 0.3rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-family: var(--font);
+    }
+    td.col-name, td.col-industry {
+      max-width: 9rem;
       overflow: hidden;
       text-overflow: ellipsis;
-      text-align: left;
-      color: var(--muted);
     }
     footer {
-      margin-top: 1.5rem;
+      margin-top: 1rem;
       font-size: 0.78rem;
       color: var(--muted);
     }
@@ -284,50 +255,20 @@
       padding: 0.1rem 0.35rem;
       border-radius: 4px;
     }
-    .unit-note {
-      margin: 0 0 1rem;
-      padding: 0.75rem 1rem;
-      background: #1a2a1f;
-      border: 1px solid #2d5a3d;
-      border-radius: var(--radius);
-      color: #b8e0c8;
-      font-size: 0.88rem;
-      line-height: 1.55;
-    }
-    .unit-note strong { color: #7ddea3; }
-    .unit-note code {
-      font-family: var(--mono);
-      background: #0f1a14;
-      padding: 0.1rem 0.35rem;
-      border-radius: 4px;
-      color: #c8f0d8;
-    }
-    .rev-cell {
-      font-family: var(--mono);
-      font-size: 0.84rem;
-      white-space: nowrap;
-    }
-    .rev-cell .unit {
-      margin-left: 0.35rem;
-      color: var(--muted);
-      font-size: 0.72rem;
-      font-family: var(--font);
-    }
+    .panel-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
   </style>
 </head>
 <body>
   <header>
-    <h1>台股每月營收 · PEAD 掃描（MVP）</h1>
-    <p>抓取時合併上市＋上櫃；若官方 API 月份不同步，會自動用公開資訊觀測站補齊，讓同一月份兩邊都能看。點表頭可排序。</p>
+    <h1>台股每月營收 · PEAD 做多異常</h1>
+    <p>極端成長 + 驚喜／轉折（S1 產業中位、S2 自身 12 月中位）。只做多。可回補 24 個月歷史、下載 CSV。</p>
   </header>
 
   <main>
     <div class="toolbar">
       <div class="field">
         <label>資料月份</label>
-        <select id="monthSelect">
-          <option value="">— 尚無資料 —</option>
-        </select>
+        <select id="monthSelect"><option value="">— 尚無資料 —</option></select>
       </div>
       <div class="field">
         <label>市場</label>
@@ -339,51 +280,107 @@
       </div>
       <div class="field">
         <label>最低當月營收（新台幣千元）</label>
-        <input type="number" id="minRevenue" value="50000" step="10000" title="單位：新台幣千元。50000 千元 = 新台幣 5,000 萬元" />
+        <input type="number" id="minRevenue" value="50000" step="10000" />
       </div>
       <div class="actions">
         <button type="button" class="primary" id="btnFetch">抓取最新營收</button>
+        <button type="button" class="warn" id="btnBackfill" title="從公開資訊觀測站回補近 24 個月，可能需數分鐘">回補 24 個月歷史</button>
         <button type="button" id="btnReload">重新載入</button>
-        <button type="button" class="ghost" id="btnDownload">下載資料庫</button>
+        <button type="button" class="ghost" id="btnDownloadDb">下載資料庫</button>
       </div>
     </div>
 
-    <div class="status" id="status">就緒。可先按「抓取最新營收」。</div>
+    <div class="status" id="status">就緒。</div>
 
-    <div class="unit-note" id="unitNote">
+    <div class="unit-note">
       <strong>金額單位：新台幣千元（仟元）</strong>
       · 表上數字 × 1,000 = 新台幣元
-      · 例：<code>50,000</code> = 新台幣 5,000 萬元；
-      <code>1,000,000</code> = 新台幣 10 億元
-      · YoY% / MoM% 為增減百分比 · <strong>點欄位名稱可排序（再點切換升冪／降冪）</strong>
+      · 例：<code>50,000</code> = 5,000 萬元
     </div>
 
-    <section class="panel">
-      <div class="panel-head">
-        <strong>營收明細</strong>
-        <span class="hint" id="allCount">金額：新台幣千元 · 點 YoY / MoM 等欄位排序</span>
-      </div>
-      <div class="table-host" id="allTable"></div>
-    </section>
+    <div class="rule-note">
+      <strong>做多異常規則（v1）</strong><br />
+      <strong>E 極端成長：</strong>同產業 ≥5 家、產業 YoY 百分位 ≥90、YoY&gt;0、營收過門檻。<br />
+      <strong>S 驚喜／轉折：</strong>S1＝實際 YoY − 產業當月中位；S2＝實際 YoY − 自身近 12 月 YoY 中位（至少 6 個月歷史）。
+      驚喜平均 ≥15 百分點，或驚喜百分位 ≥85，或由負轉正／連兩月加速（且 YoY&gt;0）。
+    </div>
+
+    <div class="tabs">
+      <button type="button" class="active" data-tab="signals">做多異常</button>
+      <button type="button" data-tab="all">營收明細</button>
+    </div>
+
+    <div id="tab-signals">
+      <section class="panel">
+        <div class="panel-head">
+          <strong>E · 極端成長（做多）</strong>
+          <span class="hint" id="extremeCount">—</span>
+          <div class="panel-actions">
+            <button type="button" class="ghost" id="btnCsvExtreme">下載 CSV</button>
+          </div>
+        </div>
+        <div class="table-host" id="extremeTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <strong>S · 驚喜／轉折（做多，S1+S2）</strong>
+          <span class="hint" id="surpriseCount">—</span>
+          <div class="panel-actions">
+            <button type="button" class="ghost" id="btnCsvSurprise">下載 CSV</button>
+          </div>
+        </div>
+        <div class="table-host" id="surpriseTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <strong>合併做多名單（E∪S）</strong>
+          <span class="hint" id="allLongCount">—</span>
+          <div class="panel-actions">
+            <button type="button" class="ghost" id="btnCsvAll">下載 CSV</button>
+          </div>
+        </div>
+        <div class="table-host" id="allLongTable"></div>
+      </section>
+    </div>
+
+    <div id="tab-all" hidden>
+      <section class="panel">
+        <div class="panel-head">
+          <strong>營收明細</strong>
+          <span class="hint" id="allCount">金額：新台幣千元 · 點欄位排序</span>
+        </div>
+        <div class="table-host" id="allTable"></div>
+      </section>
+    </div>
 
     <footer>
-      資料庫路徑：<code id="dbPath">data/revenue.db</code>
-      · 營收欄位皆為<strong>新台幣千元</strong>（公開資訊觀測站／證交所 OpenAPI 原文單位）
+      資料庫：<code id="dbPath">data/revenue.db</code>
+      · 歷史來源：公開資訊觀測站 MOPS 彙總
+      · 只做多，不做空
     </footer>
   </main>
 
   <script>
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
+    let activeTab = "signals";
 
-    /** 排序狀態（預設依 YoY 降冪） */
-    let sortKey = "yoy_pct";
-    let sortOrder = "desc";
+    let sortKeyAll = "yoy_pct";
+    let sortOrderAll = "desc";
+    let sortState = {
+      extreme: { key: "anomaly_score", order: "desc" },
+      surprise: { key: "anomaly_score", order: "desc" },
+      allLong: { key: "anomaly_score", order: "desc" },
+    };
 
-    /** 過濾後資料；排序只動複本 */
     let allRows = [];
+    let signalData = {
+      extreme_growth: [],
+      surprise_turnaround: [],
+      all_long: [],
+    };
 
-    const COLS = [
+    const COLS_ALL = [
       { key: "company_id", label: "代號", left: true },
       { key: "company_name", label: "名稱", left: true },
       { key: "market_label", label: "市場", left: true },
@@ -393,6 +390,21 @@
       { key: "mom_pct", label: "MoM 月增率%", left: false },
       { key: "ytd_yoy_pct", label: "累計YoY%", left: false },
       { key: "note", label: "備註", left: true },
+    ];
+
+    const COLS_SIG = [
+      { key: "company_id", label: "代號", left: true },
+      { key: "company_name", label: "名稱", left: true },
+      { key: "market_label", label: "市場", left: true },
+      { key: "industry", label: "產業", left: true },
+      { key: "revenue_current", label: "當月營收（千元）", left: false },
+      { key: "yoy_pct", label: "YoY%", left: false },
+      { key: "industry_yoy_pctile", label: "產業百分位", left: false },
+      { key: "surprise_s1", label: "驚喜S1", left: false },
+      { key: "surprise_s2", label: "驚喜S2", left: false },
+      { key: "surprise_avg", label: "驚喜平均", left: false },
+      { key: "anomaly_score", label: "綜合分", left: false },
+      { key: "flags", label: "標記", left: true },
     ];
 
     function setStatus(msg, kind = "") {
@@ -407,18 +419,17 @@
       return `<span class="${cls}">${n.toFixed(2)}%</span>`;
     }
 
-    function fmtNum(v) {
+    function fmtNum(v, dig = 0) {
       if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
-      return Number(v).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+      return Number(v).toLocaleString("zh-TW", { maximumFractionDigits: dig });
     }
 
-    /** 營收：顯示千元數字 + 單位，hover 顯示約略新台幣元 / 億元 */
     function fmtRevenue(v) {
       if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
       const n = Number(v);
-      const ntd = n * 1000; // 千元 → 元
-      const yi = ntd / 1e8;  // 億元
-      const title = `新台幣 ${n.toLocaleString("zh-TW")} 千元 ＝ 新台幣 ${ntd.toLocaleString("zh-TW")} 元（約 ${yi.toLocaleString("zh-TW", { maximumFractionDigits: 2 })} 億元）`;
+      const ntd = n * 1000;
+      const yi = ntd / 1e8;
+      const title = `新台幣 ${fmtNum(n)} 千元 ＝ ${fmtNum(ntd)} 元（約 ${yi.toFixed(2)} 億）`;
       return `<span class="rev-cell" title="${title}">${fmtNum(n)}<span class="unit">千元</span></span>`;
     }
 
@@ -432,133 +443,172 @@
 
     function sortRows(rows, key, order) {
       const mult = order === "asc" ? 1 : -1;
-      const numericKeys = new Set([
+      const numeric = new Set([
         "revenue_current", "yoy_pct", "mom_pct", "ytd_yoy_pct",
-        "revenue_prev_year", "revenue_prev_month",
+        "industry_yoy_pctile", "surprise_s1", "surprise_s2", "surprise_avg",
+        "anomaly_score", "surprise_pctile",
       ]);
       return [...rows].sort((a, b) => {
-        let va = a[key];
-        let vb = b[key];
-        if (key === "market_label") {
-          va = a.market_label || a.market || "";
-          vb = b.market_label || b.market || "";
+        let va = key === "market_label" ? (a.market_label || a.market) : a[key];
+        let vb = key === "market_label" ? (b.market_label || b.market) : b[key];
+        if (key === "flags") {
+          va = (a.signal_types || []).join(",");
+          vb = (b.signal_types || []).join(",");
         }
-        const aNull = va === null || va === undefined || va === "";
-        const bNull = vb === null || vb === undefined || vb === "";
-        if (aNull && bNull) return String(a.company_id || "").localeCompare(String(b.company_id || ""));
-        if (aNull) return 1;
-        if (bNull) return -1;
-        if (numericKeys.has(key)) {
-          const na = Number(va);
-          const nb = Number(vb);
-          if (na !== nb) return (na - nb) * mult;
+        const aN = va === null || va === undefined || va === "";
+        const bN = vb === null || vb === undefined || vb === "";
+        if (aN && bN) return String(a.company_id).localeCompare(String(b.company_id));
+        if (aN) return 1;
+        if (bN) return -1;
+        if (numeric.has(key)) {
+          const d = Number(va) - Number(vb);
+          if (d !== 0) return d * mult;
         } else {
-          const cmp = String(va).localeCompare(String(vb), "zh-Hant");
-          if (cmp !== 0) return cmp * mult;
+          const c = String(va).localeCompare(String(vb), "zh-Hant");
+          if (c !== 0) return c * mult;
         }
-        return String(a.company_id || "").localeCompare(String(b.company_id || ""));
+        return String(a.company_id).localeCompare(String(b.company_id));
       });
     }
 
-    function renderTable(rows, key, order) {
-      if (!rows || !rows.length) {
-        return `<div class="empty">尚無資料。請先抓取或選擇有資料的月份。</div>`;
+    function flagHtml(r) {
+      let h = "";
+      if (r.is_extreme_growth) h += `<span class="tag e">E極端</span>`;
+      if (r.is_surprise_long) h += `<span class="tag s">S驚喜</span>`;
+      if (r.is_turnaround) h += `<span class="tag t">轉折</span>`;
+      if (r.is_accelerating) h += `<span class="tag t">加速</span>`;
+      return h || "—";
+    }
+
+    function renderGeneric(rows, cols, sortKey, sortOrder, tableId) {
+      if (!rows.length) {
+        return `<div class="empty">尚無資料。可先「回補 24 個月歷史」或「抓取最新營收」。</div>`;
       }
-      const th = COLS.map((c) => {
-        const isSorted = key === c.key;
-        const arrow = isSorted ? (order === "desc" ? " ↓" : " ↑") : "";
-        const sorted = isSorted ? " sorted" : "";
-        const title = isSorted
-          ? (order === "desc" ? "目前降冪，再點改升冪" : "目前升冪，再點改降冪")
-          : "點此排序（升冪／降冪）";
-        return `<th class="${c.left ? "left" : ""}${sorted}" data-sort="${c.key}" title="${title}">${c.label}${arrow}</th>`;
+      const th = cols.map((c) => {
+        const on = sortKey === c.key;
+        const arrow = on ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
+        return `<th class="${c.left ? "left" : ""}${on ? " sorted" : ""}" data-table="${tableId}" data-sort="${c.key}">${c.label}${arrow}</th>`;
       }).join("");
-
-      const body = rows.map((r) => `
-        <tr>
-          <td class="left mono">${esc(r.company_id)}</td>
-          <td class="left col-name" title="${esc(r.company_name)}">${esc(r.company_name)}</td>
-          <td class="left">${marketBadge(r.market, r.market_label)}</td>
-          <td class="left col-industry" title="${esc(r.industry)}">${esc(r.industry)}</td>
-          <td>${fmtRevenue(r.revenue_current)}</td>
-          <td>${fmtPct(r.yoy_pct)}</td>
-          <td>${fmtPct(r.mom_pct)}</td>
-          <td>${fmtPct(r.ytd_yoy_pct)}</td>
-          <td class="note-cell" title="${esc(r.note)}">${r.note && r.note !== "-" ? esc(r.note) : ""}</td>
-        </tr>
-      `).join("");
-
+      const body = rows.map((r) => {
+        const cells = cols.map((c) => {
+          if (c.key === "company_id") return `<td class="left mono">${esc(r.company_id)}</td>`;
+          if (c.key === "company_name") return `<td class="left col-name" title="${esc(r.company_name)}">${esc(r.company_name)}</td>`;
+          if (c.key === "market_label") return `<td class="left">${marketBadge(r.market, r.market_label)}</td>`;
+          if (c.key === "industry") return `<td class="left col-industry" title="${esc(r.industry)}">${esc(r.industry)}</td>`;
+          if (c.key === "revenue_current") return `<td>${fmtRevenue(r.revenue_current)}</td>`;
+          if (c.key === "yoy_pct" || c.key === "mom_pct" || c.key === "ytd_yoy_pct") return `<td>${fmtPct(r[c.key])}</td>`;
+          if (c.key === "industry_yoy_pctile" || c.key === "surprise_pctile" || c.key === "anomaly_score") return `<td>${fmtNum(r[c.key], 1)}</td>`;
+          if (c.key.startsWith("surprise_") || c.key.startsWith("expected_")) return `<td>${fmtPct(r[c.key])}</td>`;
+          if (c.key === "flags") return `<td class="left">${flagHtml(r)}</td>`;
+          if (c.key === "note") return `<td class="left" style="max-width:8rem;overflow:hidden;text-overflow:ellipsis" title="${esc(r.note)}">${r.note && r.note !== "-" ? esc(r.note) : ""}</td>`;
+          return `<td>${esc(r[c.key])}</td>`;
+        }).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
       return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
     }
 
-    function orderLabel() {
-      const col = COLS.find((c) => c.key === sortKey);
-      const name = col ? col.label : sortKey;
-      return `${name} ${sortOrder === "desc" ? "降冪 ↓" : "升冪 ↑"}`;
+    function bindSort(container, tableId, onSort) {
+      container.querySelectorAll("th[data-sort]").forEach((th) => {
+        th.addEventListener("click", () => onSort(th.dataset.sort));
+      });
     }
 
-    function paintTable() {
-      const sorted = sortRows(allRows, sortKey, sortOrder);
-      $("allTable").innerHTML = renderTable(sorted, sortKey, sortOrder);
-      $("allCount").textContent =
-        `${sorted.length} 筆 · 金額：新台幣千元 · 排序：${orderLabel()}（再點表頭切換）`;
-      $("allTable").querySelectorAll("th[data-sort]").forEach((th) => {
-        th.addEventListener("click", () => {
-          const key = th.dataset.sort;
-          if (sortKey === key) {
-            sortOrder = sortOrder === "desc" ? "asc" : "desc";
-          } else {
-            sortKey = key;
-            // YoY / MoM / 營收：第一次點先降冪（看最大的）
-            sortOrder = (key.includes("pct") || key.includes("revenue")) ? "desc" : "asc";
+    function paintSignals() {
+      const paint = (key, elId, countId, rowsKey) => {
+        const st = sortState[key];
+        const rows = sortRows(signalData[rowsKey] || [], st.key, st.order);
+        const el = $(elId);
+        el.innerHTML = renderGeneric(rows, COLS_SIG, st.key, st.order, key);
+        $(countId).textContent = `${rows.length} 家 · 排序：${st.key} ${st.order === "desc" ? "↓" : "↑"}`;
+        bindSort(el, key, (col) => {
+          if (st.key === col) st.order = st.order === "desc" ? "asc" : "desc";
+          else {
+            st.key = col;
+            st.order = "desc";
           }
-          paintTable();
+          paintSignals();
         });
+      };
+      paint("extreme", "extremeTable", "extremeCount", "extreme_growth");
+      paint("surprise", "surpriseTable", "surpriseCount", "surprise_turnaround");
+      paint("allLong", "allLongTable", "allLongCount", "all_long");
+    }
+
+    function paintAll() {
+      const rows = sortRows(allRows, sortKeyAll, sortOrderAll);
+      $("allTable").innerHTML = renderGeneric(rows, COLS_ALL, sortKeyAll, sortOrderAll, "all");
+      $("allCount").textContent = `${rows.length} 筆 · 新台幣千元 · ${sortKeyAll} ${sortOrderAll === "desc" ? "↓" : "↑"}`;
+      bindSort($("allTable"), "all", (col) => {
+        if (sortKeyAll === col) sortOrderAll = sortOrderAll === "desc" ? "asc" : "desc";
+        else {
+          sortKeyAll = col;
+          sortOrderAll = (col.includes("pct") || col.includes("revenue")) ? "desc" : "asc";
+        }
+        paintAll();
       });
     }
 
     async function loadMonths(preferYm) {
-      const res = await fetch("/api/months");
-      const data = await res.json();
-      const sel = $("monthSelect");
+      const data = await (await fetch("/api/months")).json();
       const months = data.months || [];
+      const sel = $("monthSelect");
       if (!months.length) {
         sel.innerHTML = `<option value="">— 尚無資料 —</option>`;
         return null;
       }
       sel.innerHTML = months.map((m) => {
-        const both = m.complete ? "上市+上櫃" : (m.n_listed && m.n_otc ? "上市+上櫃" : (m.n_listed ? "僅上市" : "僅上櫃"));
         const mark = m.complete ? "✓" : "△";
-        return `<option value="${m.year_month}">${mark} ${m.label}（${both} · 上市 ${m.n_listed} / 上櫃 ${m.n_otc} · 共 ${m.n} 筆）</option>`;
+        const both = m.complete ? "上市+上櫃" : (m.n_listed && m.n_otc ? "部分" : (m.n_listed ? "僅上市" : "僅上櫃"));
+        return `<option value="${m.year_month}">${mark} ${m.label}（${both} · ${m.n} 筆）</option>`;
       }).join("");
-      if (preferYm && months.some((m) => m.year_month === preferYm)) {
-        sel.value = preferYm;
-      } else {
-        // 預設選最新「已齊」月份
-        const complete = months.find((m) => m.complete);
-        if (complete) sel.value = complete.year_month;
+      if (preferYm && months.some((m) => m.year_month === preferYm)) sel.value = preferYm;
+      else {
+        const c = months.find((m) => m.complete);
+        if (c) sel.value = c.year_month;
       }
       return sel.value;
+    }
+
+    async function loadSignals() {
+      const ym = $("monthSelect").value;
+      if (!ym) {
+        signalData = { extreme_growth: [], surprise_turnaround: [], all_long: [] };
+        paintSignals();
+        return;
+      }
+      const qs = new URLSearchParams({ year_month: ym, min_revenue: $("minRevenue").value || "0" });
+      const market = $("marketSelect").value;
+      if (market) qs.set("market", market);
+      const res = await fetch(`/api/signals?${qs}`);
+      const data = await res.json();
+      if (data.error) {
+        setStatus(data.error, "error");
+        return;
+      }
+      signalData = {
+        extreme_growth: data.extreme_growth || [],
+        surprise_turnaround: data.surprise_turnaround || [],
+        all_long: data.all_long || [],
+      };
+      paintSignals();
+      setStatus(
+        `做多異常 ${data.label} · 樣本 ${data.universe} 家 → E ${data.counts.extreme_growth} / S ${data.counts.surprise_turnaround} / 合併 ${data.counts.all_long}`,
+        "ok"
+      );
     }
 
     async function loadAll() {
       const ym = $("monthSelect").value;
       if (!ym) {
         allRows = [];
-        $("allTable").innerHTML = `<div class="empty">尚無月份資料</div>`;
-        $("allCount").textContent = "—";
+        paintAll();
         return;
       }
+      const qs = new URLSearchParams({ year_month: ym, sort: "yoy_pct", order: "desc", limit: "10000" });
       const market = $("marketSelect").value;
-      const qs = new URLSearchParams({
-        year_month: ym,
-        sort: "yoy_pct",
-        order: "desc",
-        limit: "10000",
-      });
       if (market) qs.set("market", market);
-      const res = await fetch(`/api/revenue?${qs}`);
-      const data = await res.json();
+      const data = await (await fetch(`/api/revenue?${qs}`)).json();
       if (data.error) {
         setStatus(data.error, "error");
         return;
@@ -566,85 +616,119 @@
       allRows = data.rows || [];
       const minRev = Number($("minRevenue").value || 0);
       if (minRev > 0) {
-        allRows = allRows.filter(
-          (r) => r.revenue_current != null && Number(r.revenue_current) >= minRev
-        );
+        allRows = allRows.filter((r) => r.revenue_current != null && Number(r.revenue_current) >= minRev);
       }
-      // 保留使用者目前的排序欄（含 MoM）；若尚無則預設 YoY 降冪
-      if (!sortKey) {
-        sortKey = "yoy_pct";
-        sortOrder = "desc";
-      }
-      paintTable();
-      setStatus(
-        `營收明細：${data.label} · ${allRows.length} 筆 · 金額單位：新台幣千元 · ${orderLabel()}`,
-        "ok"
-      );
+      paintAll();
+      setStatus(`營收明細 ${data.label} · ${allRows.length} 筆 · 新台幣千元`, "ok");
     }
 
     async function refreshView() {
-      await loadAll();
+      if (activeTab === "signals") await loadSignals();
+      else await loadAll();
     }
 
     async function fetchLatest() {
       $("btnFetch").disabled = true;
-      setStatus("正在抓取上市 + 上櫃最新營收…");
+      setStatus("正在抓取最新上市+上櫃，並補齊雙市場…");
       try {
-        const res = await fetch("/api/fetch", {
+        const data = await (await fetch("/api/fetch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ markets: ["L", "O"] }),
-        });
-        const data = await res.json();
-        const openapiParts = (data.summary || []).map(
-          (s) => `${s.market_label} ${s.fetched} 筆（${(s.labels || []).join(",")}）`
-        );
-        const fillParts = (data.fill || [])
-          .filter((f) => f.filled && f.filled.length)
-          .map((f) => {
-            const bits = f.filled.map((x) => `${x.market_label}+${x.fetched}`).join("/");
-            return `${f.label} 補齊 ${bits}`;
-          });
-        let msg = "抓取完成：" + (openapiParts.join("；") || "—");
-        if (fillParts.length) msg += " · " + fillParts.join("；");
-        if (data.errors && data.errors.length) {
-          msg += " · 部分問題：" + data.errors.map((e) => `${e.market}: ${e.error}`).join("；");
-        }
-        // 完整月份提示
-        const completeMonths = (data.months || []).filter((m) => m.complete).map((m) => m.label);
-        if (completeMonths.length) {
-          msg += ` · 已齊月份：${completeMonths.join("、")}`;
-        }
+        })).json();
+        const parts = (data.summary || []).map((s) => `${s.market_label} ${s.fetched} 筆`);
+        let msg = "抓取完成：" + parts.join("；");
+        if (data.errors?.length) msg += " · 問題：" + data.errors.map((e) => e.error).join("；");
         setStatus(msg, data.ok ? "ok" : "error");
-        const prefer = data.preferred_year_month
-          || (data.year_months && data.year_months[data.year_months.length - 1])
-          || null;
-        await loadMonths(prefer);
+        await loadMonths(data.preferred_year_month || null);
         await refreshView();
-      } catch (err) {
-        setStatus("抓取失敗：" + err.message, "error");
+      } catch (e) {
+        setStatus("抓取失敗：" + e.message, "error");
       } finally {
         $("btnFetch").disabled = false;
       }
+    }
+
+    async function backfill24() {
+      if (!confirm("將從公開資訊觀測站回補近 24 個月上市+上櫃（已齊月份會跳過）。可能需數分鐘，確定？")) return;
+      $("btnBackfill").disabled = true;
+      $("btnFetch").disabled = true;
+      setStatus("回補 24 個月歷史中…請勿關閉頁面（約 1～5 分鐘）");
+      try {
+        const data = await (await fetch("/api/backfill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ months: 24, skip_complete: true, sleep_s: 0.5 }),
+        })).json();
+        const filled = (data.steps || []).filter((s) => !s.skipped && s.filled?.length).length;
+        const skipped = (data.steps || []).filter((s) => s.skipped).length;
+        let msg = `回補結束：處理區間至 ${data.end_ym} · 新抓 ${filled} 個月 · 跳過已齊 ${skipped} · 已齊月份共 ${data.complete_months}`;
+        if (data.errors?.length) {
+          msg += `\n部分失敗 ${data.errors.length} 筆（可再按一次回補重試）`;
+        }
+        setStatus(msg, data.ok ? "ok" : "error");
+        await loadMonths(data.preferred_year_month || null);
+        await refreshView();
+      } catch (e) {
+        setStatus("回補失敗：" + e.message, "error");
+      } finally {
+        $("btnBackfill").disabled = false;
+        $("btnFetch").disabled = false;
+      }
+    }
+
+    function csvUrl(which) {
+      const ym = $("monthSelect").value;
+      if (!ym) return null;
+      const qs = new URLSearchParams({
+        year_month: ym,
+        which,
+        min_revenue: $("minRevenue").value || "0",
+      });
+      const market = $("marketSelect").value;
+      if (market) qs.set("market", market);
+      return `/api/signals.csv?${qs}`;
+    }
+
+    function downloadCsv(which) {
+      const url = csvUrl(which);
+      if (!url) {
+        setStatus("請先選擇月份", "error");
+        return;
+      }
+      window.location.href = url;
     }
 
     async function init() {
       try {
         const st = await (await fetch("/api/status")).json();
         if (st.db_path) $("dbPath").textContent = st.db_path;
-      } catch (_) { /* ignore */ }
+      } catch (_) {}
       await loadMonths();
       await refreshView();
     }
 
     $("btnFetch").addEventListener("click", fetchLatest);
+    $("btnBackfill").addEventListener("click", backfill24);
     $("btnReload").addEventListener("click", refreshView);
-    $("btnDownload").addEventListener("click", () => {
-      window.location.href = "/api/download-db";
-    });
+    $("btnDownloadDb").addEventListener("click", () => { window.location.href = "/api/download-db"; });
+    $("btnCsvExtreme").addEventListener("click", () => downloadCsv("extreme_growth"));
+    $("btnCsvSurprise").addEventListener("click", () => downloadCsv("surprise_turnaround"));
+    $("btnCsvAll").addEventListener("click", () => downloadCsv("all_long"));
     $("monthSelect").addEventListener("change", refreshView);
     $("marketSelect").addEventListener("change", refreshView);
     $("minRevenue").addEventListener("change", refreshView);
+
+    document.querySelectorAll(".tabs button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        activeTab = btn.dataset.tab;
+        $("tab-signals").hidden = activeTab !== "signals";
+        $("tab-all").hidden = activeTab !== "all";
+        refreshView();
+      });
+    });
 
     init();
   </script>

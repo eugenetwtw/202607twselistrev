@@ -10,7 +10,7 @@ pip3 install -r requirements.txt
 python3 app.py
 ```
 
-開啟 <http://127.0.0.1:5050>
+開啟 <http://127.0.0.1:5051>（預設埠；也可用 `PORT=5050 python3 app.py`）
 
 1. 按 **回補 24 個月歷史**（首次建議；約數分鐘）
 2. 或 **抓取最新營收**（OpenAPI + 缺邊用 MOPS 補齊）

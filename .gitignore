@@ -10,6 +10,7 @@ venv/
 # Local data (SQLite can be re-fetched)
 data/
 *.db
+data/price_cache/
 
 # OS / IDE
 .DS_Store

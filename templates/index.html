@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台股每月營收 · PEAD 做多異常</title>
+  <title>台股每月營收 · Long PEAD</title>
+  <meta name="server-version" content="{{ server_version | default('unknown') }}" />
   <style>
     :root {
       --bg: #0f1419;
@@ -38,9 +39,12 @@
     header h1 { margin: 0 0 0.25rem; font-size: 1.35rem; font-weight: 650; }
     header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
     main {
-      max-width: min(1680px, 98vw);
+      /* 寬表需要橫向空間；避免 panel 底色只蓋到部分欄 */
+      max-width: none;
+      width: 100%;
       margin: 0 auto;
-      padding: 1.25rem 1.5rem 3rem;
+      padding: 1.25rem 1.25rem 3rem;
+      box-sizing: border-box;
     }
     .toolbar {
       display: flex;
@@ -158,8 +162,11 @@
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      overflow: visible;
+      /* 橫向捲在 panel 內，底色隨內容寬度一起走 */
+      overflow-x: auto;
+      overflow-y: visible;
       margin-bottom: 1.25rem;
+      max-width: 100%;
     }
     .panel-head {
       display: flex;
@@ -170,16 +177,27 @@
       padding: 0.85rem 1.1rem;
       border-bottom: 1px solid var(--border);
       font-size: 0.92rem;
+      min-width: 100%;
+      box-sizing: border-box;
+      background: var(--panel);
+      z-index: 3;
     }
     .panel-head strong { font-weight: 600; }
     .hint { color: var(--muted); font-size: 0.8rem; }
-    .table-host { overflow: visible; }
+    .table-host {
+      /* 表格本身撐開寬度；底色畫在 table/td 上 */
+      overflow: visible;
+      width: max-content;
+      min-width: 100%;
+      background: var(--panel);
+    }
     table {
       width: max-content;
       min-width: 100%;
       border-collapse: separate;
       border-spacing: 0;
       font-size: 0.875rem;
+      background: var(--panel);
     }
     th, td {
       padding: 0.55rem 0.9rem;
@@ -188,6 +206,8 @@
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
       vertical-align: middle;
+      /* 每一格都鋪底，避免寬表右側露 body 底色 */
+      background: var(--panel);
     }
     th {
       position: sticky;
@@ -199,10 +219,15 @@
       user-select: none;
       z-index: 2;
     }
-    th:hover { color: var(--text); }
+    th:hover { color: var(--text); background: #2c3a50; }
     th.sorted { color: var(--accent); }
     th.left, td.left { text-align: left; }
-    tr:hover td { background: rgba(61, 139, 253, 0.06); }
+    tbody tr:nth-child(even) td {
+      background: #1c2636;
+    }
+    tbody tr:hover td {
+      background: rgba(61, 139, 253, 0.12);
+    }
     .pos { color: var(--up); }
     .neg { color: var(--down); }
     .mono { font-family: var(--mono); font-size: 0.84rem; }
@@ -256,15 +281,117 @@
       border-radius: 4px;
     }
     .panel-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .progress-panel {
+      display: none;
+      margin: 0 0 1rem;
+      padding: 0.9rem 1.1rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .progress-panel.active { display: block; }
+    .progress-panel .progress-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 0.55rem;
+      font-size: 0.9rem;
+    }
+    .progress-panel .progress-title strong { color: var(--warn); }
+    .progress-panel .progress-meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-bottom: 0.55rem;
+    }
+    .progress-track {
+      height: 12px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #c9a227, var(--warn), #f0d78c);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .progress-fill.indeterminate {
+      width: 35% !important;
+      animation: progress-slide 1.2s ease-in-out infinite;
+    }
+    @keyframes progress-slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(320%); }
+    }
+    .progress-actions {
+      margin-top: 0.65rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .server-banner {
+      display: none;
+      margin: 0 0 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: var(--radius);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .server-banner.bad {
+      display: block;
+      background: #3a1a1a;
+      border: 1px solid #a04040;
+      color: #ffb4b4;
+    }
+    .server-banner.ok {
+      display: block;
+      background: #1a2a1f;
+      border: 1px solid #2d5a3d;
+      color: #b8e0c8;
+      font-size: 0.8rem;
+    }
+    .server-banner code {
+      font-family: var(--mono);
+      background: #0f1419;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    td.col-chart {
+      min-width: 200px;
+      max-width: 300px;
+      padding: 0.35rem 0.45rem !important;
+      vertical-align: middle;
+    }
+    td.col-chart img.spark,
+    td.col-chart svg.spark-svg {
+      display: block;
+      width: 280px;
+      height: 96px;
+      max-width: 100%;
+      background: transparent;
+    }
+    td.col-chart .chart-pending,
+    td.col-chart .chart-empty {
+      font-size: 0.72rem;
+      color: var(--muted);
+      min-width: 100px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>台股每月營收 · PEAD 做多異常</h1>
-    <p>極端成長 + 驚喜／轉折（S1 產業中位、S2 自身 12 月中位）。只做多。可回補 24 個月歷史、下載 CSV。</p>
+    <h1>台股每月營收 · Long PEAD</h1>
+    <p>Long PEAD (Post Earnings Announcement Drift) — 極端成長 + 驚喜／轉折（S1+S2）。只做多。可回補 24 個月歷史、下載 CSV。</p>
+    <p style="margin:0.35rem 0 0;font-size:0.8rem;color:#8b9bb4">
+      頁面來源必須是 Flask：<code style="color:#c8d0dc">http://127.0.0.1:5051</code>（以終端機印出的埠為準）
+      · 伺服器版：<code id="pageVersion" style="color:#7ddea3">{{ server_version | default('?') }}</code>
+    </p>
   </header>
 
   <main>
+    <div class="server-banner" id="serverBanner"></div>
     <div class="toolbar">
       <div class="field">
         <label>資料月份</label>
@@ -285,12 +412,27 @@
       <div class="actions">
         <button type="button" class="primary" id="btnFetch">抓取最新營收</button>
         <button type="button" class="warn" id="btnBackfill" title="從公開資訊觀測站回補近 24 個月，可能需數分鐘">回補 24 個月歷史</button>
+        <button type="button" id="btnQuotes" title="重新抓上市+上櫃最近交易日收盤">重新載入收盤</button>
         <button type="button" id="btnReload">重新載入</button>
         <button type="button" class="ghost" id="btnDownloadDb">下載資料庫</button>
       </div>
     </div>
 
     <div class="status" id="status">就緒。</div>
+
+    <div class="progress-panel" id="progressPanel" aria-live="polite">
+      <div class="progress-title">
+        <strong id="progressTitle">回補歷史中…</strong>
+        <span id="progressPct">0%</span>
+      </div>
+      <div class="progress-meta" id="progressMeta">準備中</div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-actions">
+        <button type="button" class="ghost" id="btnCancelBackfill" hidden>取消回補</button>
+      </div>
+    </div>
 
     <div class="unit-note">
       <strong>金額單位：新台幣千元（仟元）</strong>
@@ -299,14 +441,17 @@
     </div>
 
     <div class="rule-note">
-      <strong>做多異常規則（v1）</strong><br />
+      <strong>Long PEAD (Post Earnings Announcement Drift) — 規則 v1</strong><br />
       <strong>E 極端成長：</strong>同產業 ≥5 家、產業 YoY 百分位 ≥90、YoY&gt;0、營收過門檻。<br />
       <strong>S 驚喜／轉折：</strong>S1＝實際 YoY − 產業當月中位；S2＝實際 YoY − 自身近 12 月 YoY 中位（至少 6 個月歷史）。
-      驚喜平均 ≥15 百分點，或驚喜百分位 ≥85，或由負轉正／連兩月加速（且 YoY&gt;0）。
+      驚喜平均 ≥15 百分點，或驚喜百分位 ≥85，或由負轉正／連兩月加速（且 YoY&gt;0）。只做多。<br />
+      <strong>股價欄：</strong>最近一交易日收盤／日漲跌%（TWSE MI_INDEX + 櫃買）；近六月漲跌%與
+      <a href="https://quickchart.io/" target="_blank" rel="noopener" style="color:#8ab4f8">QuickChart</a>
+      折線（Yahoo／交易所日 K，本機快取）。首次載入會背景補圖。
     </div>
 
     <div class="tabs">
-      <button type="button" class="active" data-tab="signals">做多異常</button>
+      <button type="button" class="active" data-tab="signals">Long PEAD (Post Earnings Announcement Drift)</button>
       <button type="button" data-tab="all">營收明細</button>
     </div>
 
@@ -364,6 +509,65 @@
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
     let activeTab = "signals";
+    /** 一律打目前頁面的 origin，避免 Live Server / 錯埠 */
+    const API = window.location.origin;
+    const EXPECTED_VERSION = "2026-07-12-long-pead-chart-axes";
+    const PAGE_VERSION = (document.querySelector('meta[name="server-version"]') || {}).content || "?";
+
+    function apiUrl(path) {
+      if (path.startsWith("http")) return path;
+      return API + (path.startsWith("/") ? path : "/" + path);
+    }
+
+    /** 安全 JSON：避免後端回 HTML 時出現 Unexpected token '<' */
+    async function fetchJson(url, options) {
+      const full = apiUrl(url);
+      const res = await fetch(full, options);
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      const text = await res.text();
+      if (!text) {
+        throw new Error(`空回應 HTTP ${res.status}（${full}）`);
+      }
+      if (ct.includes("application/json") || text.trimStart().startsWith("{") || text.trimStart().startsWith("[")) {
+        try {
+          const data = JSON.parse(text);
+          if (!res.ok) {
+            const msg = data.error || data.message || JSON.stringify(data).slice(0, 200);
+            throw new Error(`HTTP ${res.status}: ${msg}`);
+          }
+          return data;
+        } catch (e) {
+          if (e instanceof SyntaxError) {
+            throw new Error(`JSON 解析失敗 HTTP ${res.status}（${full}）: ${text.slice(0, 120)}`);
+          }
+          throw e;
+        }
+      }
+      const hint =
+        res.status === 404
+          ? "（404：你連到的不是最新 Flask，或用 Live Server 開了 HTML。請在專案目錄執行 python3 app.py，並用它印出的網址開啟。）"
+          : "";
+      throw new Error(
+        `伺服器回傳的不是 JSON（HTTP ${res.status}）${hint} URL: ${full} · 開頭: ${text.replace(/\s+/g, " ").slice(0, 80)}`
+      );
+    }
+
+    async function loadSignalsWithFallback(qs) {
+      const paths = [
+        `/api/signals?${qs}`,
+        `/api/long_pead?${qs}`,
+        `/api/pead?${qs}`,
+      ];
+      let lastErr;
+      for (const p of paths) {
+        try {
+          return await fetchJson(p);
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error("無法載入 Long PEAD 訊號");
+    }
 
     let sortKeyAll = "yoy_pct";
     let sortOrderAll = "desc";
@@ -397,8 +601,12 @@
       { key: "company_name", label: "名稱", left: true },
       { key: "market_label", label: "市場", left: true },
       { key: "industry", label: "產業", left: true },
+      { key: "chart_url", label: "近六月折線", left: true },
       { key: "revenue_current", label: "當月營收（千元）", left: false },
       { key: "yoy_pct", label: "YoY%", left: false },
+      { key: "last_close", label: "最近收盤", left: false },
+      { key: "change_pct", label: "日漲跌%", left: false },
+      { key: "change_6m_pct", label: "近六月漲跌%", left: false },
       { key: "industry_yoy_pctile", label: "產業百分位", left: false },
       { key: "surprise_s1", label: "驚喜S1", left: false },
       { key: "surprise_s2", label: "驚喜S2", left: false },
@@ -447,6 +655,7 @@
         "revenue_current", "yoy_pct", "mom_pct", "ytd_yoy_pct",
         "industry_yoy_pctile", "surprise_s1", "surprise_s2", "surprise_avg",
         "anomaly_score", "surprise_pctile",
+        "last_close", "change_pct", "change_6m_pct",
       ]);
       return [...rows].sort((a, b) => {
         let va = key === "market_label" ? (a.market_label || a.market) : a[key];
@@ -497,15 +706,215 @@
           if (c.key === "industry") return `<td class="left col-industry" title="${esc(r.industry)}">${esc(r.industry)}</td>`;
           if (c.key === "revenue_current") return `<td>${fmtRevenue(r.revenue_current)}</td>`;
           if (c.key === "yoy_pct" || c.key === "mom_pct" || c.key === "ytd_yoy_pct") return `<td>${fmtPct(r[c.key])}</td>`;
+          if (c.key === "last_close") {
+            const v = r.last_close;
+            return `<td class="mono" data-field="last_close">${v != null && !Number.isNaN(Number(v)) ? Number(v).toFixed(2) : "—"}</td>`;
+          }
+          if (c.key === "change_pct") {
+            return `<td data-field="change_pct">${fmtPct(r.change_pct)}</td>`;
+          }
+          if (c.key === "change_6m_pct") {
+            return `<td data-field="change_6m_pct">${fmtPct(r.change_6m_pct)}</td>`;
+          }
+          if (c.key === "chart_url") {
+            const code = esc(r.company_id);
+            const mkt = esc(r.market || "");
+            const svg = sparkSvg(r, { code: r.company_id });
+            if (svg) {
+              return `<td class="left col-chart" data-code="${code}" data-market="${mkt}">${svg}</td>`;
+            }
+            if (r.chart_url) {
+              // QuickChart 備援（已含橫縱軸尺標）
+              return `<td class="left col-chart" data-code="${code}" data-market="${mkt}"><img class="spark" src="${esc(r.chart_url)}" alt="${code} 近六月" title="近六月日收盤（含軸標）" loading="lazy" referrerpolicy="no-referrer" width="280" height="96" /></td>`;
+            }
+            return `<td class="left col-chart" data-code="${code}" data-market="${mkt}" data-chart-pending="1"><span class="chart-pending">載入中…</span></td>`;
+          }
           if (c.key === "industry_yoy_pctile" || c.key === "surprise_pctile" || c.key === "anomaly_score") return `<td>${fmtNum(r[c.key], 1)}</td>`;
           if (c.key.startsWith("surprise_") || c.key.startsWith("expected_")) return `<td>${fmtPct(r[c.key])}</td>`;
           if (c.key === "flags") return `<td class="left">${flagHtml(r)}</td>`;
           if (c.key === "note") return `<td class="left" style="max-width:8rem;overflow:hidden;text-overflow:ellipsis" title="${esc(r.note)}">${r.note && r.note !== "-" ? esc(r.note) : ""}</td>`;
           return `<td>${esc(r[c.key])}</td>`;
         }).join("");
-        return `<tr>${cells}</tr>`;
+        return `<tr data-code="${esc(r.company_id)}">${cells}</tr>`;
       }).join("");
       return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function formatAxisPrice(n) {
+      if (!Number.isFinite(n)) return "";
+      const abs = Math.abs(n);
+      if (abs >= 1000) return n.toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+      if (abs >= 100) return n.toLocaleString("zh-TW", { maximumFractionDigits: 1 });
+      return n.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
+    }
+
+    function formatAxisDate(dateStr) {
+      const s = String(dateStr || "");
+      if (s.length >= 10) return s.slice(5, 10); // MM-DD
+      return s;
+    }
+
+    /** 近六月折線 SVG：橫軸日期、縱軸股價尺標（對齊 202607twselist） */
+    function sparkSvg(item, { code = "" } = {}) {
+      let bars = [];
+      if (Array.isArray(item.spark_points) && item.spark_points.length >= 2) {
+        bars = item.spark_points
+          .map((p) => ({ date: p.date || "", close: Number(p.close) }))
+          .filter((b) => Number.isFinite(b.close) && b.close > 0);
+      }
+      if (bars.length < 2) return null;
+
+      const nums = bars.map((b) => b.close);
+      const w = 280;
+      const h = 96;
+      const padL = 40;
+      const padR = 8;
+      const padT = 8;
+      const padB = 20;
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+
+      let dataMin = Math.min(...nums);
+      let dataMax = Math.max(...nums);
+      let min = dataMin;
+      let max = dataMax;
+      if (min === max) {
+        const pad = Math.max(Math.abs(min) * 0.02, 0.5);
+        min -= pad;
+        max += pad;
+      }
+      const span = max - min;
+      min -= span * 0.06;
+      max += span * 0.06;
+      const range = max - min || 1;
+
+      const xAt = (i) => padL + (i / (bars.length - 1)) * plotW;
+      const yAt = (v) => padT + plotH - ((v - min) / range) * plotH;
+      const pts = bars.map((b, i) => `${xAt(i).toFixed(2)},${yAt(b.close).toFixed(2)}`).join(" ");
+      const first = nums[0];
+      const last = nums[nums.length - 1];
+      const color = last > first ? "#f87171" : last < first ? "#4ade80" : "#94a3b8";
+      const grid = "rgba(148,163,184,0.18)";
+      const tick = "rgba(148,163,184,0.88)";
+      const axis = "rgba(148,163,184,0.35)";
+
+      const yTicks = [dataMax, (dataMax + dataMin) / 2, dataMin];
+      const yGrid = yTicks
+        .map((v) => {
+          const y = yAt(v);
+          return `
+            <line x1="${padL}" y1="${y.toFixed(2)}" x2="${(w - padR).toFixed(2)}" y2="${y.toFixed(2)}"
+              stroke="${grid}" stroke-width="1" />
+            <text x="${padL - 4}" y="${y.toFixed(2)}" text-anchor="end" dominant-baseline="middle"
+              fill="${tick}" font-size="8" font-family="ui-monospace, SF Mono, Menlo, monospace">${esc(
+                formatAxisPrice(v)
+              )}</text>`;
+        })
+        .join("");
+
+      const xCount = Math.min(4, bars.length);
+      const xIdx = [];
+      for (let i = 0; i < xCount; i++) {
+        xIdx.push(xCount === 1 ? 0 : Math.round((i / (xCount - 1)) * (bars.length - 1)));
+      }
+      const seen = new Set();
+      const xLabels = xIdx
+        .filter((i) => {
+          if (seen.has(i)) return false;
+          seen.add(i);
+          return true;
+        })
+        .map((i) => {
+          const x = xAt(i);
+          const label = formatAxisDate(bars[i].date) || String(i + 1);
+          const anchor = i === 0 ? "start" : i === bars.length - 1 ? "end" : "middle";
+          return `
+            <line x1="${x.toFixed(2)}" y1="${padT}" x2="${x.toFixed(2)}" y2="${(padT + plotH).toFixed(2)}"
+              stroke="${grid}" stroke-width="1" stroke-dasharray="2 3" />
+            <text x="${x.toFixed(2)}" y="${(h - 5).toFixed(2)}" text-anchor="${anchor}"
+              fill="${tick}" font-size="8" font-family="ui-monospace, SF Mono, Menlo, monospace">${esc(
+                label
+              )}</text>`;
+        })
+        .join("");
+
+      const aria = esc(`${code || item.company_id || ""} 近六月股價`);
+      return `
+        <svg class="spark-chart spark-svg" viewBox="0 0 ${w} ${h}" width="280" height="96"
+          role="img" aria-label="${aria}" focusable="false">
+          <title>${aria}</title>
+          <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}"
+            fill="transparent" stroke="${axis}" stroke-width="1" />
+          ${yGrid}
+          ${xLabels}
+          <polyline fill="none" stroke="${color}" stroke-width="1.75"
+            stroke-linecap="round" stroke-linejoin="round" points="${pts}" />
+        </svg>`;
+    }
+
+    function renderChartCell(data, code, market) {
+      const item = {
+        spark_points: data.spark_points,
+        chart_url: data.chart_url,
+        company_id: code,
+      };
+      const svg = sparkSvg(item, { code });
+      if (svg) return svg;
+      if (data.chart_url) {
+        return `<img class="spark" src="${esc(data.chart_url)}" alt="${esc(code)} 近六月" title="近六月日收盤（含軸標）" loading="lazy" referrerpolicy="no-referrer" width="280" height="96" />`;
+      }
+      return `<span class="chart-empty">無圖</span>`;
+    }
+
+    /** 背景補近六月圖與漲跌%（限制並發） */
+    async function hydrateCharts(rootEl) {
+      if (!rootEl) return;
+      const cells = [...rootEl.querySelectorAll("td.col-chart[data-chart-pending]")];
+      if (!cells.length) return;
+      const queue = cells.map((td) => ({
+        td,
+        code: td.dataset.code,
+        market: td.dataset.market || "",
+      }));
+      const concurrency = 3;
+      let idx = 0;
+      async function worker() {
+        while (idx < queue.length) {
+          const i = idx++;
+          const { td, code, market } = queue[i];
+          if (!code) continue;
+          try {
+            const qs = new URLSearchParams({ network: "1" });
+            if (market) qs.set("market", market);
+            const data = await fetchJson(`/api/price/${encodeURIComponent(code)}?${qs}`);
+            const tr = td.closest("tr");
+            td.removeAttribute("data-chart-pending");
+            td.innerHTML = renderChartCell(data, code, market);
+            if (tr) {
+              const c6 = tr.querySelector('[data-field="change_6m_pct"]');
+              if (c6 && data.change_6m_pct != null) c6.innerHTML = fmtPct(data.change_6m_pct);
+              const lc = tr.querySelector('[data-field="last_close"]');
+              if (lc && data.last_close != null) lc.textContent = Number(data.last_close).toFixed(2);
+              const cp = tr.querySelector('[data-field="change_pct"]');
+              if (cp && data.change_pct != null) cp.innerHTML = fmtPct(data.change_pct);
+            }
+            for (const key of ["extreme_growth", "surprise_turnaround", "all_long"]) {
+              const row = (signalData[key] || []).find((x) => String(x.company_id) === String(code));
+              if (row) {
+                if (data.chart_url) row.chart_url = data.chart_url;
+                if (data.spark_points) row.spark_points = data.spark_points;
+                if (data.change_6m_pct != null) row.change_6m_pct = data.change_6m_pct;
+                if (data.last_close != null) row.last_close = data.last_close;
+                if (data.change_pct != null) row.change_pct = data.change_pct;
+              }
+            }
+          } catch (_) {
+            td.removeAttribute("data-chart-pending");
+            td.innerHTML = `<span class="chart-empty">失敗</span>`;
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
     }
 
     function bindSort(container, tableId, onSort) {
@@ -529,6 +938,8 @@
           }
           paintSignals();
         });
+        // 不 await：背景補圖
+        hydrateCharts(el);
       };
       paint("extreme", "extremeTable", "extremeCount", "extreme_growth");
       paint("surprise", "surpriseTable", "surpriseCount", "surprise_turnaround");
@@ -550,7 +961,7 @@
     }
 
     async function loadMonths(preferYm) {
-      const data = await (await fetch("/api/months")).json();
+      const data = await fetchJson("/api/months");
       const months = data.months || [];
       const sel = $("monthSelect");
       if (!months.length) {
@@ -580,8 +991,7 @@
       const qs = new URLSearchParams({ year_month: ym, min_revenue: $("minRevenue").value || "0" });
       const market = $("marketSelect").value;
       if (market) qs.set("market", market);
-      const res = await fetch(`/api/signals?${qs}`);
-      const data = await res.json();
+      const data = await loadSignalsWithFallback(qs);
       if (data.error) {
         setStatus(data.error, "error");
         return;
@@ -592,10 +1002,28 @@
         all_long: data.all_long || [],
       };
       paintSignals();
+      const qAsOf = data.quote_as_of ? ` · 收盤日 ${data.quote_as_of}` : "";
       setStatus(
-        `做多異常 ${data.label} · 樣本 ${data.universe} 家 → E ${data.counts.extreme_growth} / S ${data.counts.surprise_turnaround} / 合併 ${data.counts.all_long}`,
+        `Long PEAD ${data.label} · 樣本 ${data.universe} 家 → E ${data.counts.extreme_growth} / S ${data.counts.surprise_turnaround} / 合併 ${data.counts.all_long}${qAsOf}`,
         "ok"
       );
+    }
+
+    async function refreshQuotes() {
+      $("btnQuotes").disabled = true;
+      setStatus("重新載入最近交易日收盤…");
+      try {
+        const data = await fetchJson("/api/quotes/refresh", { method: "POST" });
+        setStatus(
+          `收盤已更新：${data.count || 0} 檔 · 日期 ${data.as_of || "—"}（上市 ${data.twse || 0} / 上櫃 ${data.tpex || 0}）`,
+          data.ok ? "ok" : "error"
+        );
+        await refreshView();
+      } catch (e) {
+        setStatus("收盤更新失敗：" + e.message, "error");
+      } finally {
+        $("btnQuotes").disabled = false;
+      }
     }
 
     async function loadAll() {
@@ -608,7 +1036,7 @@
       const qs = new URLSearchParams({ year_month: ym, sort: "yoy_pct", order: "desc", limit: "10000" });
       const market = $("marketSelect").value;
       if (market) qs.set("market", market);
-      const data = await (await fetch(`/api/revenue?${qs}`)).json();
+      const data = await fetchJson(`/api/revenue?${qs}`);
       if (data.error) {
         setStatus(data.error, "error");
         return;
@@ -631,11 +1059,11 @@
       $("btnFetch").disabled = true;
       setStatus("正在抓取最新上市+上櫃，並補齊雙市場…");
       try {
-        const data = await (await fetch("/api/fetch", {
+        const data = await fetchJson("/api/fetch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ markets: ["L", "O"] }),
-        })).json();
+        });
         const parts = (data.summary || []).map((s) => `${s.market_label} ${s.fetched} 筆`);
         let msg = "抓取完成：" + parts.join("；");
         if (data.errors?.length) msg += " · 問題：" + data.errors.map((e) => e.error).join("；");
@@ -649,31 +1077,208 @@
       }
     }
 
-    async function backfill24() {
-      if (!confirm("將從公開資訊觀測站回補近 24 個月上市+上櫃（已齊月份會跳過）。可能需數分鐘，確定？")) return;
-      $("btnBackfill").disabled = true;
-      $("btnFetch").disabled = true;
-      setStatus("回補 24 個月歷史中…請勿關閉頁面（約 1～5 分鐘）");
+    let backfillAbort = false;
+
+    function showProgress(show) {
+      $("progressPanel").classList.toggle("active", !!show);
+      if (!show) {
+        $("progressFill").style.width = "0%";
+        $("progressFill").classList.remove("indeterminate");
+        $("btnCancelBackfill").hidden = true;
+      }
+    }
+
+    function setProgress(done, total, meta) {
+      const pct = total > 0 ? Math.round((100 * done) / total) : 0;
+      $("progressPct").textContent = `${pct}%`;
+      $("progressFill").classList.remove("indeterminate");
+      $("progressFill").style.width = `${pct}%`;
+      $("progressMeta").textContent = meta || "";
+      $("progressTitle").textContent =
+        done >= total ? "回補完成" : `回補歷史中… ${done}/${total}`;
+    }
+
+    /** 前端自算近 N 個「資料月」（預設到上個月），不依賴 backfill_plan 路由 */
+    function buildMonthPlan(nMonths, endYm) {
+      let y, m;
+      if (endYm && /^\d{6}$/.test(endYm)) {
+        y = parseInt(endYm.slice(0, 4), 10);
+        m = parseInt(endYm.slice(4, 6), 10);
+      } else {
+        const d = new Date();
+        d.setDate(1);
+        d.setMonth(d.getMonth() - 1);
+        y = d.getFullYear();
+        m = d.getMonth() + 1;
+      }
+      const items = [];
+      for (let i = 0; i < nMonths; i++) {
+        const ym = `${y}${String(m).padStart(2, "0")}`;
+        const label = `${y}-${String(m).padStart(2, "0")}`;
+        items.push({ year_month: ym, label });
+        m -= 1;
+        if (m <= 0) {
+          m = 12;
+          y -= 1;
+        }
+      }
+      return items.reverse();
+    }
+
+    async function backfillStepMonth(yearMonth) {
+      // 優先 fill-month（舊伺服器也有）；失敗再試 backfill_step
       try {
-        const data = await (await fetch("/api/backfill", {
+        return await fetchJson("/api/fill-month", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ months: 24, skip_complete: true, sleep_s: 0.5 }),
-        })).json();
-        const filled = (data.steps || []).filter((s) => !s.skipped && s.filled?.length).length;
-        const skipped = (data.steps || []).filter((s) => s.skipped).length;
-        let msg = `回補結束：處理區間至 ${data.end_ym} · 新抓 ${filled} 個月 · 跳過已齊 ${skipped} · 已齊月份共 ${data.complete_months}`;
-        if (data.errors?.length) {
-          msg += `\n部分失敗 ${data.errors.length} 筆（可再按一次回補重試）`;
+          body: JSON.stringify({
+            year_month: yearMonth,
+            skip_if_complete: true,
+            force: false,
+          }),
+        });
+      } catch (e1) {
+        try {
+          return await fetchJson("/api/backfill_step", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              year_month: yearMonth,
+              skip_if_complete: true,
+            }),
+          });
+        } catch (e2) {
+          throw new Error(e1.message || e2.message);
         }
-        setStatus(msg, data.ok ? "ok" : "error");
-        await loadMonths(data.preferred_year_month || null);
+      }
+    }
+
+    async function backfill24() {
+      if (!confirm("將從公開資訊觀測站回補近 24 個月上市+上櫃（已齊月份會跳過）。可能需數分鐘，確定？")) return;
+
+      backfillAbort = false;
+      $("btnBackfill").disabled = true;
+      $("btnFetch").disabled = true;
+      $("btnCancelBackfill").hidden = false;
+      showProgress(true);
+      $("progressTitle").textContent = "回補歷史中…";
+      $("progressPct").textContent = "…";
+      $("progressMeta").textContent = "建立回補清單…";
+      $("progressFill").style.width = "0%";
+      $("progressFill").classList.add("indeterminate");
+      setStatus("回補 24 個月：建立清單…");
+
+      let filled = 0;
+      let skipped = 0;
+      let failed = 0;
+      const failDetails = [];
+
+      try {
+        // 用現有 /api/months 判斷已齊；清單在前端算，避免 404
+        let known = {};
+        let endYm = null;
+        try {
+          const md = await fetchJson("/api/months");
+          (md.months || []).forEach((m) => {
+            known[m.year_month] = m;
+          });
+          if (md.months && md.months.length) {
+            endYm = md.months[0].year_month; // 已是 DESC
+          }
+        } catch (_) {
+          /* 沒 months 也可用本機日曆算 */
+        }
+
+        const items = buildMonthPlan(24, endYm).map((it) => {
+          const k = known[it.year_month];
+          return {
+            ...it,
+            n_listed: k ? k.n_listed : 0,
+            n_otc: k ? k.n_otc : 0,
+            complete: !!(k && k.complete),
+          };
+        });
+        const total = items.length;
+        const needFetch = items.filter((x) => !x.complete).length;
+        const already = total - needFetch;
+
+        setProgress(
+          0,
+          total,
+          `共 ${total} 個月 · 需抓約 ${needFetch} · 已齊可跳過 ${already}`
+        );
+        setStatus(`回補清單：共 ${total} 個月（需抓 ${needFetch}、已齊 ${already}）`);
+
+        for (let i = 0; i < items.length; i++) {
+          if (backfillAbort) {
+            setStatus(
+              `回補已取消：已完成 ${i}/${total}（新抓 ${filled} · 跳過 ${skipped} · 失敗 ${failed}）`,
+              "error"
+            );
+            $("progressTitle").textContent = "回補已取消";
+            break;
+          }
+
+          const item = items[i];
+          setProgress(
+            i,
+            total,
+            `正在處理 ${item.label}（${i + 1}/${total}）` +
+              (item.complete ? " · 已齊將跳過" : " · 抓取中…")
+          );
+          setStatus(`回補中 ${i + 1}/${total}：${item.label}…`);
+
+          try {
+            const step = await backfillStepMonth(item.year_month);
+            const errs = step.errors || (step.result && step.result.errors) || [];
+            const filledList = step.filled || (step.result && step.result.filled) || [];
+
+            if (step.error) {
+              failed += 1;
+              failDetails.push(`${item.label}: ${step.error}`);
+            } else if (step.skipped) {
+              skipped += 1;
+            } else if (errs.length) {
+              failed += 1;
+              failDetails.push(
+                `${item.label}: ` + errs.map((e) => `${e.market || ""} ${e.error || e}`).join("; ")
+              );
+              if (filledList.length) filled += 1;
+            } else if (filledList.length) {
+              filled += 1;
+            } else {
+              // 無 filled 也無 error：視為已齊跳過或無資料需補
+              skipped += 1;
+            }
+          } catch (e) {
+            failed += 1;
+            failDetails.push(`${item.label}: ${e.message}`);
+          }
+
+          setProgress(i + 1, total, `完成 ${item.label}（${i + 1}/${total}）`);
+        }
+
+        if (!backfillAbort) {
+          let msg = `回補結束：新抓 ${filled} 個月 · 跳過已齊 ${skipped} · 失敗 ${failed}`;
+          if (failDetails.length) {
+            msg += "\n" + failDetails.slice(0, 5).join("\n");
+            if (failDetails.length > 5) msg += `\n…另有 ${failDetails.length - 5} 筆`;
+          }
+          setStatus(msg, failed ? "error" : "ok");
+          $("progressTitle").textContent = failed ? "回補結束（有失敗）" : "回補完成";
+        }
+
+        await loadMonths(null);
         await refreshView();
       } catch (e) {
         setStatus("回補失敗：" + e.message, "error");
+        $("progressTitle").textContent = "回補失敗";
+        $("progressFill").classList.remove("indeterminate");
       } finally {
         $("btnBackfill").disabled = false;
         $("btnFetch").disabled = false;
+        $("btnCancelBackfill").hidden = true;
+        setTimeout(() => showProgress(false), 2500);
       }
     }
 
@@ -687,7 +1292,7 @@
       });
       const market = $("marketSelect").value;
       if (market) qs.set("market", market);
-      return `/api/signals.csv?${qs}`;
+      return apiUrl(`/api/signals.csv?${qs}`);
     }
 
     function downloadCsv(which) {
@@ -700,16 +1305,58 @@
     }
 
     async function init() {
+      const banner = $("serverBanner");
+      // file:// 或非 localhost 常見問題
+      if (location.protocol === "file:") {
+        banner.className = "server-banner bad";
+        banner.innerHTML =
+          "<strong>錯誤：你用檔案方式開啟頁面。</strong>請在終端機執行 <code>cd ~/Downloads/twselistrev && python3 app.py</code>，再用瀏覽器開 <code>http://127.0.0.1:5050</code>。";
+        setStatus("請用 Flask 網址開啟，不要直接開 HTML 檔", "error");
+        return;
+      }
+
       try {
-        const st = await (await fetch("/api/status")).json();
+        const st = await fetchJson("/api/status");
         if (st.db_path) $("dbPath").textContent = st.db_path;
-      } catch (_) {}
+        const ver = st.version || "(無 version)";
+        const hasSignals = (st.features || []).includes("signals") ||
+          (st.api_routes || []).some((r) => r.includes("signal") || r.includes("pead"));
+        if (!st.version || !hasSignals) {
+          banner.className = "server-banner bad";
+          banner.innerHTML =
+            `<strong>伺服器版本過舊或不完整</strong>（status.version=${ver}）。` +
+            `請關掉所有舊的 python 行程，在 <code>/Users/pe/Downloads/twselistrev</code> 執行 <code>python3 app.py</code>，` +
+            `並確認網址列是終端機印出的那個（通常 <code>http://127.0.0.1:5051</code>）。勿用 VS Code Live Server。`;
+          setStatus("伺服器缺少 Long PEAD API，請重啟 app.py", "error");
+          return;
+        }
+        banner.className = "server-banner ok";
+        banner.innerHTML =
+          `已連線 <code>${API}</code> · 伺服器 <code>${ver}</code> · 頁面 stamp <code>${PAGE_VERSION}</code>` +
+          (ver !== EXPECTED_VERSION && PAGE_VERSION !== "?"
+            ? " · <strong>頁面與後端版本字串不同，建議強制重新整理 (Cmd+Shift+R)</strong>"
+            : "");
+        console.info("server", st.version, st.features, st.api_routes);
+      } catch (e) {
+        banner.className = "server-banner bad";
+        banner.innerHTML =
+          `<strong>無法連到 API</strong>：${esc(e.message)}<br>` +
+          `請執行：<code>cd /Users/pe/Downloads/twselistrev && python3 app.py</code> 後開啟印出的網址。`;
+        setStatus("無法連線伺服器：" + e.message, "error");
+        return;
+      }
       await loadMonths();
       await refreshView();
     }
 
     $("btnFetch").addEventListener("click", fetchLatest);
     $("btnBackfill").addEventListener("click", backfill24);
+    $("btnQuotes").addEventListener("click", refreshQuotes);
+    $("btnCancelBackfill").addEventListener("click", () => {
+      backfillAbort = true;
+      $("progressMeta").textContent = "正在取消（等目前這個月跑完）…";
+      setStatus("取消中…等目前月份結束", "error");
+    });
     $("btnReload").addEventListener("click", refreshView);
     $("btnDownloadDb").addEventListener("click", () => { window.location.href = "/api/download-db"; });
     $("btnCsvExtreme").addEventListener("click", () => downloadCsv("extreme_growth"));

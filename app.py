@@ -22,6 +22,8 @@ import pandas as pd
 import requests
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
+from price_service import price_service
+
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "revenue.db"
@@ -767,6 +769,10 @@ def serialize_signal_row(r: dict) -> dict:
         "prev2_yoy",
         "hist_yoy_n",
         "anomaly_score",
+        "last_close",
+        "change_pct",
+        "change",
+        "change_6m_pct",
     ):
         if k in r and r[k] is not None:
             try:
@@ -780,6 +786,17 @@ def serialize_signal_row(r: dict) -> dict:
     out["is_turnaround"] = bool(r.get("is_turnaround"))
     out["is_accelerating"] = bool(r.get("is_accelerating"))
     out["signal_types"] = r.get("signal_types") or []
+    out["chart_url"] = r.get("chart_url")
+    # 前端 SVG 軸標用：精簡點位
+    sp = r.get("spark_points") or []
+    out["spark_points"] = [
+        {"date": str(p.get("date") or "")[:10], "close": float(p["close"])}
+        for p in sp
+        if p.get("close") is not None
+    ][:48]
+    out["quote_as_of"] = r.get("quote_as_of")
+    out["quote_source"] = r.get("quote_source")
+    out["history_points"] = r.get("history_points")
     return out
 
 
@@ -1008,9 +1025,18 @@ def serialize_row(r: dict) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
+APP_VERSION = "2026-07-12-long-pead-chart-axes"
+
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        server_version=APP_VERSION,
+        api_routes=sorted(
+            r.rule for r in app.url_map.iter_rules() if str(r.rule).startswith("/api")
+        ),
+    )
 
 
 @app.get("/api/months")
@@ -1169,27 +1195,186 @@ def api_fetch():
 
 @app.post("/api/fill-month")
 def api_fill_month():
-    """對指定年月強制用 MOPS 補齊上市+上櫃。"""
+    """
+    對指定年月用 MOPS 補齊上市+上櫃。
+    - skip_if_complete=true：已齊則跳過（回補進度條）
+    - force=true：即使已齊也重抓兩邊
+    預設 force=true（維持舊行為：手動補單月會重抓）
+    """
     body = request.get_json(silent=True) or {}
     ym = str(body.get("year_month") or "").strip()
     if not re.fullmatch(r"\d{6}", ym):
         return jsonify({"error": "year_month 須為 YYYYMM"}), 400
+    skip_if_complete = bool(body.get("skip_if_complete", False))
+    force = bool(body.get("force", True))
+    min_count = 50
+    try:
+        min_count = int(body.get("min_count", 50))
+    except (TypeError, ValueError):
+        min_count = 50
+
     db = get_db()
-    result = ensure_both_markets(db, ym, min_count=50, force=True)
+    if skip_if_complete and not force:
+        payload = _backfill_step_payload(
+            ym, skip_if_complete=True, min_count=min_count
+        )
+    else:
+        fr = ensure_both_markets(db, ym, min_count=min_count, force=force)
+        payload = {
+            "ok": fr["complete"] and not fr["errors"],
+            "skipped": False,
+            "year_month": ym,
+            "label": fr["label"],
+            "before": fr["before"],
+            "after": fr["after"],
+            "complete": fr["complete"],
+            "filled": fr["filled"],
+            "errors": fr["errors"],
+        }
+
     return jsonify(
         {
-            "ok": result["complete"] and not result["errors"],
-            "result": result,
+            **payload,
+            "result": {
+                "year_month": payload.get("year_month"),
+                "label": payload.get("label"),
+                "before": payload.get("before"),
+                "after": payload.get("after"),
+                "complete": payload.get("complete"),
+                "filled": payload.get("filled"),
+                "errors": payload.get("errors"),
+            },
             "months": list_months(db),
         }
+    )
+
+
+def _backfill_plan_payload(
+    *,
+    months: int = 24,
+    end_ym: str | None = None,
+    min_count: int = 50,
+) -> dict[str, Any]:
+    db = get_db()
+    end = end_ym or latest_data_year_month(db) or default_backfill_end_ym()
+    yms = year_month_range_ending(end, months)
+    items = []
+    need = 0
+    for ym in yms:
+        counts = market_counts(db, ym)
+        complete = counts.get("L", 0) >= min_count and counts.get("O", 0) >= min_count
+        if not complete:
+            need += 1
+        items.append(
+            {
+                "year_month": ym,
+                "label": format_ym_display(ym),
+                "n_listed": counts.get("L", 0),
+                "n_otc": counts.get("O", 0),
+                "complete": complete,
+            }
+        )
+    return {
+        "end_ym": end,
+        "months_requested": months,
+        "total": len(items),
+        "need_fetch": need,
+        "already_complete": len(items) - need,
+        "items": items,
+    }
+
+
+def _backfill_step_payload(
+    ym: str,
+    *,
+    skip_if_complete: bool = True,
+    min_count: int = 50,
+) -> dict[str, Any]:
+    db = get_db()
+    counts = market_counts(db, ym)
+    complete = counts.get("L", 0) >= min_count and counts.get("O", 0) >= min_count
+    if skip_if_complete and complete:
+        return {
+            "ok": True,
+            "skipped": True,
+            "year_month": ym,
+            "label": format_ym_display(ym),
+            "before": counts,
+            "after": counts,
+            "complete": True,
+            "filled": [],
+            "errors": [],
+        }
+
+    fr = ensure_both_markets(db, ym, min_count=min_count, force=False)
+    return {
+        "ok": fr["complete"] and not fr["errors"],
+        "skipped": False,
+        "year_month": ym,
+        "label": fr["label"],
+        "before": fr["before"],
+        "after": fr["after"],
+        "complete": fr["complete"],
+        "filled": fr["filled"],
+        "errors": fr["errors"],
+    }
+
+
+@app.get("/api/backfill_plan")
+@app.get("/api/backfill/plan")
+def api_backfill_plan():
+    """
+    回補計畫：近 N 個月清單 + 是否已齊。
+    前端依此逐月呼叫 /api/backfill_step 以顯示進度條。
+    """
+    try:
+        months = int(request.args.get("months", 24))
+    except (TypeError, ValueError):
+        months = 24
+    months = max(1, min(months, 36))
+    end_ym = request.args.get("end_ym") or None
+    if end_ym:
+        end_ym = str(end_ym).strip()
+        if not re.fullmatch(r"\d{6}", end_ym):
+            return jsonify({"error": "end_ym 須為 YYYYMM"}), 400
+    min_count = 50
+    try:
+        min_count = int(request.args.get("min_count", 50))
+    except (TypeError, ValueError):
+        min_count = 50
+
+    return jsonify(
+        _backfill_plan_payload(months=months, end_ym=end_ym, min_count=min_count)
+    )
+
+
+@app.post("/api/backfill_step")
+@app.post("/api/backfill/step")
+def api_backfill_step():
+    """回補單一資料年月（上市+上櫃）。供前端進度條逐月呼叫。"""
+    body = request.get_json(silent=True) or {}
+    ym = str(body.get("year_month") or "").strip()
+    if not re.fullmatch(r"\d{6}", ym):
+        return jsonify({"error": "year_month 須為 YYYYMM"}), 400
+    skip_if_complete = body.get("skip_if_complete", True)
+    min_count = 50
+    try:
+        min_count = int(body.get("min_count", 50))
+    except (TypeError, ValueError):
+        min_count = 50
+
+    return jsonify(
+        _backfill_step_payload(
+            ym, skip_if_complete=bool(skip_if_complete), min_count=min_count
+        )
     )
 
 
 @app.post("/api/backfill")
 def api_backfill():
     """
-    回補近 N 個月（預設 24）上市+上櫃歷史營收（MOPS）。
-    已齊月份預設跳過。可能需數分鐘。
+    一次回補近 N 個月（無進度串流；建議改用 plan + step）。
+    已齊月份預設跳過。
     """
     body = request.get_json(silent=True) or {}
     try:
@@ -1221,43 +1406,68 @@ def api_backfill():
     return jsonify(result)
 
 
+def _attach_prices(rows: list[dict], *, allow_network_history: bool = False) -> list[dict]:
+    """掛上收盤／漲跌／近六月／QuickChart（歷史優先用磁碟快取）。"""
+    try:
+        price_service.ensure_quotes()
+        price_service.enrich_rows(
+            rows, allow_network_history=allow_network_history, max_network=0
+        )
+    except Exception:
+        for r in rows:
+            r.setdefault("last_close", None)
+            r.setdefault("change_pct", None)
+            r.setdefault("change_6m_pct", None)
+            r.setdefault("chart_url", None)
+    return rows
+
+
+def _signals_json_response(ym: str, market: str | None, min_revenue: float):
+    db = get_db()
+    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
+    # 先掛報價 + 快取內歷史；缺圖由表前端逐檔 /api/price/<code> 補
+    for key in ("extreme_growth", "surprise_turnaround", "all_long"):
+        _attach_prices(raw[key], allow_network_history=False)
+    return {
+        "version": APP_VERSION,
+        "year_month": raw["year_month"],
+        "label": raw["label"],
+        "universe": raw["universe"],
+        "params": raw["params"],
+        "quote_as_of": price_service.quote_as_of,
+        "counts": {
+            "extreme_growth": len(raw["extreme_growth"]),
+            "surprise_turnaround": len(raw["surprise_turnaround"]),
+            "all_long": len(raw["all_long"]),
+        },
+        "extreme_growth": [serialize_signal_row(r) for r in raw["extreme_growth"]],
+        "surprise_turnaround": [
+            serialize_signal_row(r) for r in raw["surprise_turnaround"]
+        ],
+        "all_long": [serialize_signal_row(r) for r in raw["all_long"]],
+    }
+
+
 @app.get("/api/signals")
+@app.get("/api/long_pead")
+@app.get("/api/pead")
 def api_signals():
-    """做多異常：極端成長 + 驚喜/轉折（S1+S2）。"""
+    """Long PEAD：極端成長 + 驚喜/轉折（S1+S2）。多路徑別名避免舊行程混淆。"""
     ym = request.args.get("year_month", "").strip()
     if not ym:
-        return jsonify({"error": "缺少 year_month"}), 400
+        return jsonify({"error": "缺少 year_month", "version": APP_VERSION}), 400
     market = request.args.get("market") or None
     try:
         min_revenue = float(request.args.get("min_revenue", 50_000))
     except ValueError:
         min_revenue = 50_000
-
-    db = get_db()
-    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
-    return jsonify(
-        {
-            "year_month": raw["year_month"],
-            "label": raw["label"],
-            "universe": raw["universe"],
-            "params": raw["params"],
-            "counts": {
-                "extreme_growth": len(raw["extreme_growth"]),
-                "surprise_turnaround": len(raw["surprise_turnaround"]),
-                "all_long": len(raw["all_long"]),
-            },
-            "extreme_growth": [serialize_signal_row(r) for r in raw["extreme_growth"]],
-            "surprise_turnaround": [
-                serialize_signal_row(r) for r in raw["surprise_turnaround"]
-            ],
-            "all_long": [serialize_signal_row(r) for r in raw["all_long"]],
-        }
-    )
+    return jsonify(_signals_json_response(ym, market, min_revenue))
 
 
 @app.get("/api/signals.csv")
+@app.get("/api/long_pead.csv")
 def api_signals_csv():
-    """下載指定月份做多異常 CSV。"""
+    """下載指定月份 Long PEAD CSV。"""
     ym = request.args.get("year_month", "").strip()
     if not ym:
         return jsonify({"error": "缺少 year_month"}), 400
@@ -1354,6 +1564,48 @@ def api_download_db():
     )
 
 
+@app.post("/api/quotes/refresh")
+def api_quotes_refresh():
+    """重新抓最近交易日收盤（上市 MI_INDEX + 上櫃）。"""
+    result = price_service.refresh_quotes()
+    return jsonify({"version": APP_VERSION, **result})
+
+
+@app.get("/api/price/<code>")
+def api_price_one(code: str):
+    """單一股票：收盤、漲跌%、近六月漲跌%、QuickChart URL。"""
+    code = str(code or "").strip()
+    if not re.fullmatch(r"\d{3,6}", code):
+        return jsonify({"error": "invalid code"}), 400
+    market = request.args.get("market")  # L | O | None
+    allow_network = request.args.get("network", "1") != "0"
+    price_service.ensure_quotes()
+    q = price_service.get_quote(code) or {}
+    hist = price_service.get_history(
+        code, market=market, allow_network=allow_network
+    )
+    spark = hist.get("spark_points") or price_service.downsample_points(
+        hist.get("points") or [], max_n=48
+    )
+    return jsonify(
+        {
+            "version": APP_VERSION,
+            "code": code,
+            "last_close": q.get("close"),
+            "change": q.get("change"),
+            "change_pct": q.get("change_pct"),
+            "prev_close": q.get("prev_close"),
+            "quote_as_of": price_service.quote_as_of,
+            "quote_source": q.get("source"),
+            "change_6m_pct": hist.get("change_6m_pct"),
+            "chart_url": hist.get("chart_url"),
+            "spark_points": spark,
+            "history_points": len(hist.get("points") or []),
+            "history_source": hist.get("source"),
+        }
+    )
+
+
 @app.get("/api/status")
 def api_status():
     db = get_db()
@@ -1361,15 +1613,33 @@ def api_status():
     total = db.execute("SELECT COUNT(*) FROM monthly_revenue").fetchone()[0]
     return jsonify(
         {
+            "version": APP_VERSION,
             "db_path": str(DB_PATH),
             "db_exists": DB_PATH.exists(),
             "db_size_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
             "total_rows": total,
             "months": months,
             "apis": API_URLS,
+            "features": [
+                "fill-month",
+                "backfill_plan",
+                "backfill_step",
+                "signals",
+                "long_pead",
+                "pead",
+                "signals.csv",
+                "price",
+                "quotes/refresh",
+            ],
+            "quote_as_of": price_service.quote_as_of,
+            "quote_count": len(price_service.quotes),
+            "api_routes": sorted(
+                r.rule for r in app.url_map.iter_rules() if str(r.rule).startswith("/api")
+            ),
             "note": (
-                "OpenAPI 僅最新月；歷史可用 /api/backfill 回補 24 個月。"
-                "異常訊號：極端成長 + S1/S2 驚喜轉折（只做多）。"
+                "OpenAPI 僅最新月；歷史可用「回補 24 個月」（逐月 fill-month）。"
+                "Long PEAD：極端成長 + S1/S2 驚喜轉折（只做多）。"
+                "請用本程式開啟的網址，勿用 Live Server 直接開 HTML。"
             ),
         }
     )
@@ -1381,7 +1651,8 @@ def main() -> None:
 
     init_db()
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "5050"))
+    # 本機預設 5051（5050 常被舊行程佔用造成「有網頁但 API 404」）
+    port = int(os.environ.get("PORT", "5051"))
 
     # 若預設埠被佔用，自動往後找空埠（避免 Address already in use）
     def port_free(p: int) -> bool:
@@ -1394,15 +1665,34 @@ def main() -> None:
                 return False
 
     if not port_free(port):
-        for candidate in range(port + 1, port + 20):
-            if port_free(candidate):
-                print(f"Port {port} in use, switching to {candidate}")
-                port = candidate
-                break
-        else:
-            raise SystemExit(f"No free port in range {port}-{port + 19}")
+        # 釋放目標埠上的殘留行程（避免舊 app 佔埠 → 網頁有、API 404）
+        if os.environ.get("TWSE_KILL_PORT", "1") == "1":
+            import subprocess
 
+            try:
+                out = subprocess.check_output(["lsof", "-ti", f":{port}"], text=True)
+                for pid in out.split():
+                    print(f"Killing stale process on :{port} pid={pid}")
+                    subprocess.call(["kill", "-9", pid])
+            except Exception:
+                pass
+            import time as _time
+
+            _time.sleep(0.4)
+        if not port_free(port):
+            for candidate in range(port + 1, port + 20):
+                if port_free(candidate):
+                    print(f"Port {port} in use, switching to {candidate}")
+                    port = candidate
+                    break
+            else:
+                raise SystemExit(f"No free port in range {port}-{port + 19}")
+
+    print(f"=== TWSE Long PEAD {APP_VERSION} ===")
     print(f"Open http://{host}:{port}")
+    print("API routes:", ", ".join(
+        sorted(r.rule for r in app.url_map.iter_rules() if str(r.rule).startswith("/api"))
+    ))
     # use_reloader=False：避免 debug reloader 再開第二個 process 佔埠
     app.run(host=host, port=port, debug=True, use_reloader=False)
 

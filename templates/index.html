@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>台股每月營收 · PEAD 掃描</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --panel2: #243044;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --accent-dim: #1e4a8a;
+      --up: #3dd68c;
+      --down: #f07178;
+      --radius: 10px;
+      --font: "SF Pro Text", "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif;
+      --mono: "SF Mono", "Menlo", "Consolas", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #152033 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0 0 0.25rem;
+      font-size: 1.35rem;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    /* 可排序表頭更明顯 */
+    th[data-sort] {
+      cursor: pointer;
+    }
+    th[data-sort]::after {
+      content: " ⇅";
+      opacity: 0.35;
+      font-size: 0.75em;
+    }
+    th[data-sort].sorted::after {
+      content: "";
+      opacity: 1;
+    }
+    th[data-sort].sorted {
+      color: var(--accent);
+    }
+    main {
+      max-width: min(1680px, 98vw);
+      margin: 0 auto;
+      padding: 1.25rem 1.5rem 3rem;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem 1.15rem;
+      align-items: flex-end;
+      padding: 1.1rem 1.2rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 1.15rem;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 140px;
+    }
+    .field label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    select, input[type="number"] {
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.7rem;
+      font-size: 0.9rem;
+      min-width: 160px;
+    }
+    select:focus, input:focus {
+      outline: 2px solid var(--accent-dim);
+      border-color: var(--accent);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-left: auto;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0.55rem 1rem;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    button:hover:not(:disabled) {
+      background: #2c3c55;
+      border-color: #4a5d7a;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: #5a9dff;
+      color: #fff;
+      font-weight: 600;
+    }
+    button.primary:hover:not(:disabled) {
+      background: #5a9dff;
+    }
+    button.ghost {
+      background: transparent;
+    }
+    .status {
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0 0.25rem 0.9rem;
+      min-height: 1.5rem;
+    }
+    .status.error { color: var(--down); }
+    .status.ok { color: var(--up); }
+    .tabs {
+      display: flex;
+      gap: 0.4rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.55rem;
+    }
+    .tabs button {
+      border-radius: 6px 6px 0 0;
+      border-bottom: none;
+    }
+    .tabs button.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: visible;
+      min-width: 0;
+    }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.85rem 1.1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.92rem;
+    }
+    .panel-head strong { font-weight: 600; }
+    .hint {
+      color: var(--muted);
+      font-size: 0.8rem;
+      flex-shrink: 0;
+    }
+    /* 不設內嵌捲軸：整頁捲動即可（避免雙垂直軸） */
+    .table-host {
+      overflow: visible;
+    }
+    table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.875rem;
+    }
+    th, td {
+      padding: 0.6rem 1rem;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      vertical-align: middle;
+      font-variant-numeric: tabular-nums;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--panel2);
+      color: var(--muted);
+      font-weight: 600;
+      text-align: right;
+      cursor: pointer;
+      user-select: none;
+      z-index: 2;
+      letter-spacing: 0.01em;
+    }
+    th:hover { color: var(--text); }
+    th.sorted { color: var(--accent); }
+    th.left, td.left { text-align: left; }
+    tr:hover td { background: rgba(61, 139, 253, 0.06); }
+    td.col-name {
+      min-width: 4.5rem;
+      max-width: 8rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    td.col-industry {
+      min-width: 6rem;
+      max-width: 10rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pos { color: var(--up); }
+    .neg { color: var(--down); }
+    .mono { font-family: var(--mono); font-size: 0.84rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+    }
+    .badge.L { border-color: #3d8bfd55; color: #8ab4f8; }
+    .badge.O { border-color: #3dd68c55; color: #7ddea3; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+    @media (min-width: 1400px) {
+      .grid-2 {
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        align-items: start;
+      }
+    }
+    @media (max-width: 720px) {
+      .actions { margin-left: 0; width: 100%; }
+      th, td { padding: 0.5rem 0.7rem; }
+    }
+    .empty {
+      padding: 2.5rem 1rem;
+      text-align: center;
+      color: var(--muted);
+    }
+    .note-cell {
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+      color: var(--muted);
+    }
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    footer code {
+      font-family: var(--mono);
+      background: var(--panel);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    .unit-note {
+      margin: 0 0 1rem;
+      padding: 0.75rem 1rem;
+      background: #1a2a1f;
+      border: 1px solid #2d5a3d;
+      border-radius: var(--radius);
+      color: #b8e0c8;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .unit-note strong { color: #7ddea3; }
+    .unit-note code {
+      font-family: var(--mono);
+      background: #0f1a14;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      color: #c8f0d8;
+    }
+    .rev-cell {
+      font-family: var(--mono);
+      font-size: 0.84rem;
+      white-space: nowrap;
+    }
+    .rev-cell .unit {
+      margin-left: 0.35rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-family: var(--font);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>台股每月營收 · PEAD 掃描（MVP）</h1>
+    <p>抓取時合併上市＋上櫃；若官方 API 月份不同步，會自動用公開資訊觀測站補齊，讓同一月份兩邊都能看。點表頭可排序。</p>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <div class="field">
+        <label>資料月份</label>
+        <select id="monthSelect">
+          <option value="">— 尚無資料 —</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>市場</label>
+        <select id="marketSelect">
+          <option value="">全部</option>
+          <option value="L">上市</option>
+          <option value="O">上櫃</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>最低當月營收（新台幣千元）</label>
+        <input type="number" id="minRevenue" value="50000" step="10000" title="單位：新台幣千元。50000 千元 = 新台幣 5,000 萬元" />
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" id="btnFetch">抓取最新營收</button>
+        <button type="button" id="btnReload">重新載入</button>
+        <button type="button" class="ghost" id="btnDownload">下載資料庫</button>
+      </div>
+    </div>
+
+    <div class="status" id="status">就緒。可先按「抓取最新營收」。</div>
+
+    <div class="unit-note" id="unitNote">
+      <strong>金額單位：新台幣千元（仟元）</strong>
+      · 表上數字 × 1,000 = 新台幣元
+      · 例：<code>50,000</code> = 新台幣 5,000 萬元；
+      <code>1,000,000</code> = 新台幣 10 億元
+      · YoY% / MoM% 為增減百分比 · <strong>點欄位名稱可排序（再點切換升冪／降冪）</strong>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <strong>營收明細</strong>
+        <span class="hint" id="allCount">金額：新台幣千元 · 點 YoY / MoM 等欄位排序</span>
+      </div>
+      <div class="table-host" id="allTable"></div>
+    </section>
+
+    <footer>
+      資料庫路徑：<code id="dbPath">data/revenue.db</code>
+      · 營收欄位皆為<strong>新台幣千元</strong>（公開資訊觀測站／證交所 OpenAPI 原文單位）
+    </footer>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+
+    /** 排序狀態（預設依 YoY 降冪） */
+    let sortKey = "yoy_pct";
+    let sortOrder = "desc";
+
+    /** 過濾後資料；排序只動複本 */
+    let allRows = [];
+
+    const COLS = [
+      { key: "company_id", label: "代號", left: true },
+      { key: "company_name", label: "名稱", left: true },
+      { key: "market_label", label: "市場", left: true },
+      { key: "industry", label: "產業", left: true },
+      { key: "revenue_current", label: "當月營收（新台幣千元）", left: false },
+      { key: "yoy_pct", label: "YoY 年增率%", left: false },
+      { key: "mom_pct", label: "MoM 月增率%", left: false },
+      { key: "ytd_yoy_pct", label: "累計YoY%", left: false },
+      { key: "note", label: "備註", left: true },
+    ];
+
+    function setStatus(msg, kind = "") {
+      statusEl.textContent = msg;
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function fmtPct(v) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
+      const n = Number(v);
+      const cls = n > 0 ? "pos" : n < 0 ? "neg" : "";
+      return `<span class="${cls}">${n.toFixed(2)}%</span>`;
+    }
+
+    function fmtNum(v) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
+      return Number(v).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+    }
+
+    /** 營收：顯示千元數字 + 單位，hover 顯示約略新台幣元 / 億元 */
+    function fmtRevenue(v) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
+      const n = Number(v);
+      const ntd = n * 1000; // 千元 → 元
+      const yi = ntd / 1e8;  // 億元
+      const title = `新台幣 ${n.toLocaleString("zh-TW")} 千元 ＝ 新台幣 ${ntd.toLocaleString("zh-TW")} 元（約 ${yi.toLocaleString("zh-TW", { maximumFractionDigits: 2 })} 億元）`;
+      return `<span class="rev-cell" title="${title}">${fmtNum(n)}<span class="unit">千元</span></span>`;
+    }
+
+    function marketBadge(m, label) {
+      return `<span class="badge ${m || ""}">${label || m || "—"}</span>`;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    }
+
+    function sortRows(rows, key, order) {
+      const mult = order === "asc" ? 1 : -1;
+      const numericKeys = new Set([
+        "revenue_current", "yoy_pct", "mom_pct", "ytd_yoy_pct",
+        "revenue_prev_year", "revenue_prev_month",
+      ]);
+      return [...rows].sort((a, b) => {
+        let va = a[key];
+        let vb = b[key];
+        if (key === "market_label") {
+          va = a.market_label || a.market || "";
+          vb = b.market_label || b.market || "";
+        }
+        const aNull = va === null || va === undefined || va === "";
+        const bNull = vb === null || vb === undefined || vb === "";
+        if (aNull && bNull) return String(a.company_id || "").localeCompare(String(b.company_id || ""));
+        if (aNull) return 1;
+        if (bNull) return -1;
+        if (numericKeys.has(key)) {
+          const na = Number(va);
+          const nb = Number(vb);
+          if (na !== nb) return (na - nb) * mult;
+        } else {
+          const cmp = String(va).localeCompare(String(vb), "zh-Hant");
+          if (cmp !== 0) return cmp * mult;
+        }
+        return String(a.company_id || "").localeCompare(String(b.company_id || ""));
+      });
+    }
+
+    function renderTable(rows, key, order) {
+      if (!rows || !rows.length) {
+        return `<div class="empty">尚無資料。請先抓取或選擇有資料的月份。</div>`;
+      }
+      const th = COLS.map((c) => {
+        const isSorted = key === c.key;
+        const arrow = isSorted ? (order === "desc" ? " ↓" : " ↑") : "";
+        const sorted = isSorted ? " sorted" : "";
+        const title = isSorted
+          ? (order === "desc" ? "目前降冪，再點改升冪" : "目前升冪，再點改降冪")
+          : "點此排序（升冪／降冪）";
+        return `<th class="${c.left ? "left" : ""}${sorted}" data-sort="${c.key}" title="${title}">${c.label}${arrow}</th>`;
+      }).join("");
+
+      const body = rows.map((r) => `
+        <tr>
+          <td class="left mono">${esc(r.company_id)}</td>
+          <td class="left col-name" title="${esc(r.company_name)}">${esc(r.company_name)}</td>
+          <td class="left">${marketBadge(r.market, r.market_label)}</td>
+          <td class="left col-industry" title="${esc(r.industry)}">${esc(r.industry)}</td>
+          <td>${fmtRevenue(r.revenue_current)}</td>
+          <td>${fmtPct(r.yoy_pct)}</td>
+          <td>${fmtPct(r.mom_pct)}</td>
+          <td>${fmtPct(r.ytd_yoy_pct)}</td>
+          <td class="note-cell" title="${esc(r.note)}">${r.note && r.note !== "-" ? esc(r.note) : ""}</td>
+        </tr>
+      `).join("");
+
+      return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function orderLabel() {
+      const col = COLS.find((c) => c.key === sortKey);
+      const name = col ? col.label : sortKey;
+      return `${name} ${sortOrder === "desc" ? "降冪 ↓" : "升冪 ↑"}`;
+    }
+
+    function paintTable() {
+      const sorted = sortRows(allRows, sortKey, sortOrder);
+      $("allTable").innerHTML = renderTable(sorted, sortKey, sortOrder);
+      $("allCount").textContent =
+        `${sorted.length} 筆 · 金額：新台幣千元 · 排序：${orderLabel()}（再點表頭切換）`;
+      $("allTable").querySelectorAll("th[data-sort]").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.sort;
+          if (sortKey === key) {
+            sortOrder = sortOrder === "desc" ? "asc" : "desc";
+          } else {
+            sortKey = key;
+            // YoY / MoM / 營收：第一次點先降冪（看最大的）
+            sortOrder = (key.includes("pct") || key.includes("revenue")) ? "desc" : "asc";
+          }
+          paintTable();
+        });
+      });
+    }
+
+    async function loadMonths(preferYm) {
+      const res = await fetch("/api/months");
+      const data = await res.json();
+      const sel = $("monthSelect");
+      const months = data.months || [];
+      if (!months.length) {
+        sel.innerHTML = `<option value="">— 尚無資料 —</option>`;
+        return null;
+      }
+      sel.innerHTML = months.map((m) => {
+        const both = m.complete ? "上市+上櫃" : (m.n_listed && m.n_otc ? "上市+上櫃" : (m.n_listed ? "僅上市" : "僅上櫃"));
+        const mark = m.complete ? "✓" : "△";
+        return `<option value="${m.year_month}">${mark} ${m.label}（${both} · 上市 ${m.n_listed} / 上櫃 ${m.n_otc} · 共 ${m.n} 筆）</option>`;
+      }).join("");
+      if (preferYm && months.some((m) => m.year_month === preferYm)) {
+        sel.value = preferYm;
+      } else {
+        // 預設選最新「已齊」月份
+        const complete = months.find((m) => m.complete);
+        if (complete) sel.value = complete.year_month;
+      }
+      return sel.value;
+    }
+
+    async function loadAll() {
+      const ym = $("monthSelect").value;
+      if (!ym) {
+        allRows = [];
+        $("allTable").innerHTML = `<div class="empty">尚無月份資料</div>`;
+        $("allCount").textContent = "—";
+        return;
+      }
+      const market = $("marketSelect").value;
+      const qs = new URLSearchParams({
+        year_month: ym,
+        sort: "yoy_pct",
+        order: "desc",
+        limit: "10000",
+      });
+      if (market) qs.set("market", market);
+      const res = await fetch(`/api/revenue?${qs}`);
+      const data = await res.json();
+      if (data.error) {
+        setStatus(data.error, "error");
+        return;
+      }
+      allRows = data.rows || [];
+      const minRev = Number($("minRevenue").value || 0);
+      if (minRev > 0) {
+        allRows = allRows.filter(
+          (r) => r.revenue_current != null && Number(r.revenue_current) >= minRev
+        );
+      }
+      // 保留使用者目前的排序欄（含 MoM）；若尚無則預設 YoY 降冪
+      if (!sortKey) {
+        sortKey = "yoy_pct";
+        sortOrder = "desc";
+      }
+      paintTable();
+      setStatus(
+        `營收明細：${data.label} · ${allRows.length} 筆 · 金額單位：新台幣千元 · ${orderLabel()}`,
+        "ok"
+      );
+    }
+
+    async function refreshView() {
+      await loadAll();
+    }
+
+    async function fetchLatest() {
+      $("btnFetch").disabled = true;
+      setStatus("正在抓取上市 + 上櫃最新營收…");
+      try {
+        const res = await fetch("/api/fetch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ markets: ["L", "O"] }),
+        });
+        const data = await res.json();
+        const openapiParts = (data.summary || []).map(
+          (s) => `${s.market_label} ${s.fetched} 筆（${(s.labels || []).join(",")}）`
+        );
+        const fillParts = (data.fill || [])
+          .filter((f) => f.filled && f.filled.length)
+          .map((f) => {
+            const bits = f.filled.map((x) => `${x.market_label}+${x.fetched}`).join("/");
+            return `${f.label} 補齊 ${bits}`;
+          });
+        let msg = "抓取完成：" + (openapiParts.join("；") || "—");
+        if (fillParts.length) msg += " · " + fillParts.join("；");
+        if (data.errors && data.errors.length) {
+          msg += " · 部分問題：" + data.errors.map((e) => `${e.market}: ${e.error}`).join("；");
+        }
+        // 完整月份提示
+        const completeMonths = (data.months || []).filter((m) => m.complete).map((m) => m.label);
+        if (completeMonths.length) {
+          msg += ` · 已齊月份：${completeMonths.join("、")}`;
+        }
+        setStatus(msg, data.ok ? "ok" : "error");
+        const prefer = data.preferred_year_month
+          || (data.year_months && data.year_months[data.year_months.length - 1])
+          || null;
+        await loadMonths(prefer);
+        await refreshView();
+      } catch (err) {
+        setStatus("抓取失敗：" + err.message, "error");
+      } finally {
+        $("btnFetch").disabled = false;
+      }
+    }
+
+    async function init() {
+      try {
+        const st = await (await fetch("/api/status")).json();
+        if (st.db_path) $("dbPath").textContent = st.db_path;
+      } catch (_) { /* ignore */ }
+      await loadMonths();
+      await refreshView();
+    }
+
+    $("btnFetch").addEventListener("click", fetchLatest);
+    $("btnReload").addEventListener("click", refreshView);
+    $("btnDownload").addEventListener("click", () => {
+      window.location.href = "/api/download-db";
+    });
+    $("monthSelect").addEventListener("change", refreshView);
+    $("marketSelect").addEventListener("change", refreshView);
+    $("minRevenue").addEventListener("change", refreshView);
+
+    init();
+  </script>
+</body>
+</html>

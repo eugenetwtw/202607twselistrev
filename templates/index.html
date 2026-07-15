@@ -151,12 +151,62 @@
       margin-bottom: 1rem;
       border-bottom: 1px solid var(--border);
       padding-bottom: 0.55rem;
+      flex-wrap: wrap;
     }
     .tabs button { border-radius: 6px 6px 0 0; }
     .tabs button.active {
       background: var(--accent-dim);
       border-color: var(--accent);
       color: #fff;
+    }
+    /* Long PEAD 子分頁 */
+    .subtabs {
+      display: flex;
+      gap: 0.35rem;
+      margin: 0 0 0.85rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .subtabs button {
+      border-radius: 999px;
+      padding: 0.45rem 0.95rem;
+      font-size: 0.84rem;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--muted);
+    }
+    .subtabs button:hover:not(:disabled) {
+      color: var(--text);
+      border-color: #4a5d7a;
+    }
+    .subtabs button.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    .subtabs button .count-pill {
+      display: inline-block;
+      margin-left: 0.35rem;
+      padding: 0.05rem 0.4rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      background: rgba(0,0,0,0.25);
+      color: #c8d4e8;
+      font-variant-numeric: tabular-nums;
+    }
+    .subtabs button.active .count-pill {
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+    }
+    .pead-pane { display: none; }
+    .pead-pane.active { display: block; }
+    /* 主分頁：避免 hidden + 其它 display 規則打架 */
+    .main-tab {
+      display: block;
+    }
+    .main-tab.is-hidden {
+      display: none !important;
     }
     .panel {
       background: var(--panel);
@@ -184,6 +234,71 @@
     }
     .panel-head strong { font-weight: 600; }
     .hint { color: var(--muted); font-size: 0.8rem; }
+    .w-pill {
+      display: inline-block;
+      min-width: 2.6rem;
+      padding: 0.12rem 0.4rem;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .w-hi { background: rgba(61, 214, 140, 0.22); color: #7ddea3; }
+    .w-mid { background: rgba(240, 192, 64, 0.18); color: #e6c35c; }
+    .w-lo { background: rgba(232, 93, 117, 0.18); color: #f0a0ad; }
+    .w-na { color: var(--muted); font-weight: 400; }
+    .eval-cell {
+      max-width: 14rem;
+      white-space: normal;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      color: #c5cedb;
+      text-align: left;
+    }
+    .eval-cell .eval-time {
+      display: block;
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
+    }
+    button.btn-analyze {
+      font-size: 0.75rem;
+      padding: 0.28rem 0.55rem;
+      white-space: nowrap;
+    }
+    button.btn-analyze:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .analysis-list { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.9rem 1.1rem; }
+    .analysis-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      background: var(--panel2);
+    }
+    .analysis-card h3 {
+      margin: 0 0 0.4rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .analysis-card .meta {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    .analysis-card .eval-body {
+      white-space: pre-wrap;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      color: #d6deea;
+    }
+    .analysis-card .weights {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0.45rem 0 0.6rem;
+    }
     .table-host {
       /* 表格本身撐開寬度；底色畫在 table/td 上 */
       overflow: visible;
@@ -269,6 +384,19 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    a.company-link {
+      color: #8ab4f8;
+      text-decoration: none;
+      font-weight: 600;
+      border-bottom: 1px solid transparent;
+    }
+    a.company-link:hover {
+      color: #b8d0ff;
+      border-bottom-color: #5a9dff;
+    }
+    span.company-nosite {
+      color: var(--text);
+    }
     footer {
       margin-top: 1rem;
       font-size: 0.78rem;
@@ -331,6 +459,161 @@
       display: flex;
       gap: 0.5rem;
     }
+    /* 活動終端：預設隱藏；開啟後可縮小／關閉 */
+    .activity-dock {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      width: min(480px, calc(100vw - 24px));
+      z-index: 10000;
+      display: none; /* 預設不出現 */
+      flex-direction: column;
+      background: #070b10;
+      border: 2px solid #3d8bfd;
+      border-radius: 12px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.65);
+      overflow: hidden;
+      font-size: 0.8rem;
+    }
+    .activity-dock.is-open {
+      display: flex;
+      height: min(50vh, 420px);
+      max-height: min(50vh, 420px);
+    }
+    /* 縮小：只留標題列 */
+    .activity-dock.is-open.is-min {
+      height: auto !important;
+      max-height: none !important;
+      width: min(320px, calc(100vw - 24px));
+    }
+    .activity-dock.is-open.is-min .activity-body,
+    .activity-dock.is-open.is-min .activity-sub,
+    .activity-dock.is-open.is-min .activity-track {
+      display: none !important;
+    }
+    .activity-dock.dead { border-color: #e85d75; }
+    .activity-dock.live { border-color: #3dd68c; }
+    .activity-head {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.55rem 0.65rem;
+      background: linear-gradient(180deg, #1a2a44, #101820);
+      border-bottom: 1px solid #2a3a52;
+      cursor: default;
+      flex-shrink: 0;
+    }
+    .activity-head .live-badge {
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      padding: 0.12rem 0.4rem;
+      border-radius: 4px;
+      background: #1e3f2a;
+      color: #7ddea3;
+      animation: live-pulse 1.2s ease-in-out infinite;
+    }
+    .activity-head .live-badge.off {
+      background: #2a3140;
+      color: #6b7a90;
+      animation: none;
+    }
+    .activity-head .live-badge.dead {
+      background: #3f1e24;
+      color: #f0a0ad;
+      animation: none;
+    }
+    @keyframes live-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+    .activity-head .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #7ddea3;
+      box-shadow: 0 0 10px #7ddea3;
+      flex-shrink: 0;
+    }
+    .activity-head .dot.idle { background: #6b7a90; box-shadow: none; }
+    .activity-head .dot.err { background: #e85d75; box-shadow: 0 0 8px #e85d75; }
+    .activity-head .title {
+      font-weight: 600;
+      color: #e8eef8;
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 0.82rem;
+    }
+    .activity-head .pct {
+      font-variant-numeric: tabular-nums;
+      color: var(--warn);
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+    .activity-head button {
+      padding: 0.15rem 0.4rem;
+      font-size: 0.72rem;
+      background: transparent;
+      border: 1px solid #3d4f6a;
+      color: #a8b8d0;
+    }
+    .activity-sub {
+      padding: 0.4rem 0.7rem;
+      color: #b0c0d8;
+      border-bottom: 1px solid #1e2a3c;
+      line-height: 1.4;
+      font-size: 0.78rem;
+      flex-shrink: 0;
+    }
+    .activity-sub .hb {
+      color: #7ddea3;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+    .activity-sub .hb.stale { color: #e6c35c; }
+    .activity-sub .hb.dead { color: #f0a0ad; font-weight: 700; }
+    .activity-track {
+      height: 6px;
+      background: #1a2433;
+      flex-shrink: 0;
+    }
+    .activity-track > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #3d8bfd, #7ddea3, #e6c35c);
+      transition: width 0.25s ease;
+    }
+    .activity-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.45rem 0.55rem 0.7rem;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      line-height: 1.5;
+      background: #05080c;
+      min-height: 180px;
+    }
+    .activity-line {
+      display: grid;
+      grid-template-columns: 3.5rem 1fr;
+      gap: 0.4rem;
+      padding: 0.14rem 0;
+      border-bottom: 1px solid #101820;
+    }
+    .activity-line .t { color: #4a5c78; font-size: 0.68rem; }
+    .activity-line .m { color: #d0dae8; word-break: break-word; white-space: pre-wrap; }
+    .activity-line.api .m { color: #8ab4f8; }
+    .activity-line.ok .m { color: #7ddea3; }
+    .activity-line.warn .m { color: #e6c35c; }
+    .activity-line.error .m { color: #f0a0ad; }
+    .activity-line.phase .m { color: #c9a8ff; font-weight: 600; }
+    .activity-line.tick .m { color: #6a9e88; font-size: 0.7rem; }
+    .activity-line.data .m { color: #a8c0e0; font-size: 0.7rem; opacity: 0.95; }
+    .activity-line.local .m { color: #8899aa; font-style: italic; }
     .server-banner {
       display: none;
       margin: 0 0 1rem;
@@ -413,6 +696,7 @@
         <button type="button" class="primary" id="btnFetch">抓取最新營收</button>
         <button type="button" class="warn" id="btnBackfill" title="從公開資訊觀測站回補近 24 個月，可能需數分鐘">回補 24 個月歷史</button>
         <button type="button" id="btnQuotes" title="重新抓上市+上櫃最近交易日收盤">重新載入收盤</button>
+        <button type="button" class="warn" id="btnTrendRun" title="本月有營收公司：並行 Brave+Firecrawl+GLM 打趨勢權重與供應鏈權重">本月 Run 趨勢權重</button>
         <button type="button" id="btnReload">重新載入</button>
         <button type="button" class="ghost" id="btnDownloadDb">下載資料庫</button>
       </div>
@@ -422,7 +706,7 @@
 
     <div class="progress-panel" id="progressPanel" aria-live="polite">
       <div class="progress-title">
-        <strong id="progressTitle">回補歷史中…</strong>
+        <strong id="progressTitle">處理中…</strong>
         <span id="progressPct">0%</span>
       </div>
       <div class="progress-meta" id="progressMeta">準備中</div>
@@ -430,8 +714,27 @@
         <div class="progress-fill" id="progressFill"></div>
       </div>
       <div class="progress-actions">
-        <button type="button" class="ghost" id="btnCancelBackfill" hidden>取消回補</button>
+        <button type="button" class="ghost" id="btnCancelProgress" hidden>取消</button>
       </div>
+    </div>
+
+    <!-- 右下角活動終端：僅在你按 Run 後出現；可縮小、可關閉 -->
+    <div class="activity-dock" id="activityDock" aria-live="polite" hidden>
+      <div class="activity-head">
+        <span class="live-badge off" id="activityLive">IDLE</span>
+        <span class="dot idle" id="activityDot"></span>
+        <span class="title" id="activityTitle">活動日誌</span>
+        <span class="pct" id="activityPct">0%</span>
+        <button type="button" id="btnActivityCancel" title="取消任務" hidden>取消</button>
+        <button type="button" id="btnActivityMin" title="縮小/展開">−</button>
+        <button type="button" id="btnActivityClose" title="關閉視窗">×</button>
+      </div>
+      <div class="activity-sub" id="activitySub">
+        按「本月 Run 趨勢權重」後才會在此顯示進度
+        <div class="hb" id="activityHb">心跳：—</div>
+      </div>
+      <div class="activity-track"><i id="activityBar"></i></div>
+      <div class="activity-body" id="activityBody"></div>
     </div>
 
     <div class="unit-note">
@@ -447,39 +750,98 @@
       驚喜平均 ≥15 百分點，或驚喜百分位 ≥85，或由負轉正／連兩月加速（且 YoY&gt;0）。只做多。<br />
       <strong>股價欄：</strong>最近一交易日收盤／日漲跌%（TWSE MI_INDEX + 櫃買）；近六月漲跌%與
       <a href="https://quickchart.io/" target="_blank" rel="noopener" style="color:#8ab4f8">QuickChart</a>
-      折線（Yahoo／交易所日 K，本機快取）。首次載入會背景補圖。
+      折線（Yahoo／交易所日 K，本機快取）。首次載入會背景補圖。<br />
+      <strong>每月流程：</strong>
+      ① Brave+Firecrawl+GLM 打<strong>趨勢權重</strong>（現在夯＋會續）與<strong>供應鏈權重</strong>（美股強勢鏈）→
+      ② 過濾後再看 E/S →
+      ③ 合成分產出 <strong>Ranking 30</strong> 供調倉。
+      版次：run_id + revision + analyzed_at。
     </div>
 
     <div class="tabs">
-      <button type="button" class="active" data-tab="signals">Long PEAD (Post Earnings Announcement Drift)</button>
+      <button type="button" class="active" data-tab="ranking">Ranking 30</button>
+      <button type="button" data-tab="trend">趨勢與供應鏈</button>
+      <button type="button" data-tab="signals">Long PEAD</button>
       <button type="button" data-tab="all">營收明細</button>
     </div>
 
-    <div id="tab-signals">
+    <div id="tab-ranking" class="main-tab">
       <section class="panel">
         <div class="panel-head">
+          <strong>本月 Ranking 30</strong>
+          <span class="hint" id="rankingHint">趨勢≥門檻 ∩ (E∨S) · 合成分排序</span>
+          <div class="panel-actions">
+            <label class="hint" style="display:flex;align-items:center;gap:0.35rem">
+              趨勢門檻
+              <input type="number" id="minTrendWeight" value="0.45" min="0" max="1" step="0.05" style="width:4.5rem" />
+            </label>
+            <button type="button" class="ghost" id="btnReloadRanking">重新載入</button>
+          </div>
+        </div>
+        <div class="table-host" id="rankingTable"><div class="empty">請先「本月 Run 趨勢權重」，再載入 Ranking。</div></div>
+      </section>
+    </div>
+
+    <div id="tab-trend" class="main-tab is-hidden">
+      <section class="panel">
+        <div class="panel-head">
+          <strong>趨勢權重 · 供應鏈權重</strong>
+          <span class="hint" id="trendHint">當月有營收公司 · 每月 Run 一次</span>
+          <div class="panel-actions">
+            <button type="button" class="primary" id="btnTrendRun2">本月 Run 趨勢權重</button>
+            <button type="button" class="ghost" id="btnReloadTrend">重新載入</button>
+          </div>
+        </div>
+        <div id="themeBox" class="rule-note" style="margin:0.75rem 1rem">Theme Pack 摘要將顯示於此</div>
+        <div class="table-host" id="trendTable"><div class="empty">尚無趨勢資料。</div></div>
+      </section>
+    </div>
+
+    <div id="tab-signals" class="main-tab is-hidden">
+      <div style="margin:0 0 0.75rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+        <label class="hint" style="display:flex;align-items:center;gap:0.4rem">
+          <input type="checkbox" id="chkTrendFilter" checked />
+          只顯示通過趨勢過濾的 E/S（預設開）
+        </label>
+      </div>
+      <div class="subtabs" id="peadSubtabs" role="tablist" aria-label="Long PEAD 子分頁">
+        <button type="button" class="active" data-pead="extreme" role="tab" aria-selected="true">
+          E · 極端成長<span class="count-pill" id="extremeCount">—</span>
+        </button>
+        <button type="button" data-pead="surprise" role="tab" aria-selected="false">
+          S · 驚喜／轉折<span class="count-pill" id="surpriseCount">—</span>
+        </button>
+        <button type="button" data-pead="allLong" role="tab" aria-selected="false">
+          E∪S · 合併做多<span class="count-pill" id="allLongCount">—</span>
+        </button>
+      </div>
+
+      <section class="panel pead-pane active" id="pane-extreme" data-pead-pane="extreme">
+        <div class="panel-head">
           <strong>E · 極端成長（做多）</strong>
-          <span class="hint" id="extremeCount">—</span>
+          <span class="hint" id="extremeHint">產業 YoY 百分位 ≥90 · YoY&gt;0</span>
           <div class="panel-actions">
             <button type="button" class="ghost" id="btnCsvExtreme">下載 CSV</button>
           </div>
         </div>
         <div class="table-host" id="extremeTable"></div>
       </section>
-      <section class="panel">
+
+      <section class="panel pead-pane" id="pane-surprise" data-pead-pane="surprise" hidden>
         <div class="panel-head">
           <strong>S · 驚喜／轉折（做多，S1+S2）</strong>
-          <span class="hint" id="surpriseCount">—</span>
+          <span class="hint" id="surpriseHint">驚喜／轉折／加速</span>
           <div class="panel-actions">
             <button type="button" class="ghost" id="btnCsvSurprise">下載 CSV</button>
           </div>
         </div>
         <div class="table-host" id="surpriseTable"></div>
       </section>
-      <section class="panel">
+
+      <section class="panel pead-pane" id="pane-allLong" data-pead-pane="allLong" hidden>
         <div class="panel-head">
-          <strong>合併做多名單（E∪S）</strong>
-          <span class="hint" id="allLongCount">—</span>
+          <strong>E∪S · 合併做多名單</strong>
+          <span class="hint" id="allLongHint">極端成長或驚喜／轉折</span>
           <div class="panel-actions">
             <button type="button" class="ghost" id="btnCsvAll">下載 CSV</button>
           </div>
@@ -488,13 +850,28 @@
       </section>
     </div>
 
-    <div id="tab-all" hidden>
+    <div id="tab-all" class="main-tab is-hidden">
       <section class="panel">
         <div class="panel-head">
           <strong>營收明細</strong>
           <span class="hint" id="allCount">金額：新台幣千元 · 點欄位排序</span>
         </div>
-        <div class="table-host" id="allTable"></div>
+        <div class="table-host" id="allTable"><div class="empty">切換到此分頁後會載入全部公司營收…</div></div>
+      </section>
+    </div>
+
+    <div id="tab-analysis" class="main-tab is-hidden">
+      <section class="panel">
+        <div class="panel-head">
+          <strong>訪問分析報告</strong>
+          <span class="hint" id="analysisHint">Brave + Firecrawl + GLM · 每次按分析寫入一筆含時間戳</span>
+          <div class="panel-actions">
+            <button type="button" class="ghost" id="btnReloadAnalysis">重新載入報告</button>
+          </div>
+        </div>
+        <div id="analysisList" class="analysis-list">
+          <div class="empty">尚無報告。請在 Long PEAD 名單對單一公司按「訪問分析」。</div>
+        </div>
       </section>
     </div>
 
@@ -508,11 +885,25 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
-    let activeTab = "signals";
+    /** Long PEAD 子分頁：extreme | surprise | allLong */
+    let peadSubTab = "extreme";
     /** 一律打目前頁面的 origin，避免 Live Server / 錯埠 */
     const API = window.location.origin;
-    const EXPECTED_VERSION = "2026-07-12-long-pead-chart-axes";
+    const EXPECTED_VERSION = "2026-07-15-dock-fix";
+    let activeTab = "ranking";
+    let activityUserMinimized = false;
     const PAGE_VERSION = (document.querySelector('meta[name="server-version"]') || {}).content || "?";
+    let analyzingCodes = new Set();
+    let analysisItems = [];
+    let progressAbort = false;
+    let progressKind = ""; // backfill | batch | single
+    let jobPollTimer = null;
+    let localTickTimer = null;
+    let lastLogId = 0;
+    let activityOpen = true;
+    let lastServerHb = 0; // Date.now() when we last got a server update
+    let lastJobTick = 0;
+    let pollFailCount = 0;
 
     function apiUrl(path) {
       if (path.startsWith("http")) return path;
@@ -611,8 +1002,38 @@
       { key: "surprise_s1", label: "驚喜S1", left: false },
       { key: "surprise_s2", label: "驚喜S2", left: false },
       { key: "surprise_avg", label: "驚喜平均", left: false },
-      { key: "anomaly_score", label: "綜合分", left: false },
+      { key: "anomaly_score", label: "異常分", left: false },
+      { key: "trend_weight", label: "趨勢權重", left: false },
+      { key: "supply_chain_weight", label: "供應鏈權重", left: false },
+      { key: "rank_score", label: "合成分", left: false },
       { key: "flags", label: "標記", left: true },
+    ];
+
+    const COLS_RANK = [
+      { key: "rank", label: "#", left: false },
+      { key: "company_id", label: "代號", left: true },
+      { key: "company_name", label: "名稱", left: true },
+      { key: "industry", label: "產業", left: true },
+      { key: "yoy_pct", label: "YoY%", left: false },
+      { key: "anomaly_score", label: "異常分", left: false },
+      { key: "trend_weight", label: "趨勢", left: false },
+      { key: "supply_chain_weight", label: "供應鏈", left: false },
+      { key: "rank_score", label: "合成分", left: false },
+      { key: "trend_rationale", label: "趨勢理由", left: true },
+      { key: "flags", label: "標記", left: true },
+    ];
+
+    const COLS_TREND = [
+      { key: "company_id", label: "代號", left: true },
+      { key: "company_name", label: "名稱", left: true },
+      { key: "industry", label: "產業", left: true },
+      { key: "trend_weight", label: "趨勢權重", left: false },
+      { key: "hot_now", label: "現在夯", left: false },
+      { key: "persist", label: "會續嗎", left: false },
+      { key: "supply_chain_weight", label: "供應鏈", left: false },
+      { key: "revision", label: "版次", left: false },
+      { key: "analyzed_at", label: "分析時間", left: true },
+      { key: "rationale", label: "理由", left: true },
     ];
 
     function setStatus(msg, kind = "") {
@@ -649,6 +1070,23 @@
       return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
     }
 
+    /** 對齊 twselist：有官網則點名稱直接開新分頁 */
+    function websiteHref(website) {
+      const raw = String(website || "").trim().replace(/\u3000/g, "");
+      if (!raw || raw === "-" || raw === "－") return null;
+      if (/^https?:\/\//i.test(raw)) return raw;
+      return `https://${raw}`;
+    }
+
+    function companyNameHtml(r) {
+      const name = esc(r.company_name || "");
+      const href = websiteHref(r.website);
+      if (href) {
+        return `<a class="company-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="前往公司官網：${esc(href)}">${name}</a>`;
+      }
+      return `<span class="company-nosite" title="尚無官網網址">${name}</span>`;
+    }
+
     function sortRows(rows, key, order) {
       const mult = order === "asc" ? 1 : -1;
       const numeric = new Set([
@@ -656,6 +1094,8 @@
         "industry_yoy_pctile", "surprise_s1", "surprise_s2", "surprise_avg",
         "anomaly_score", "surprise_pctile",
         "last_close", "change_pct", "change_6m_pct",
+        "pead_quality_weight", "supply_chain_weight", "composite_weight",
+        "rank_score", "trend_weight", "hot_now", "persist", "rank", "revision",
       ]);
       return [...rows].sort((a, b) => {
         let va = key === "market_label" ? (a.market_label || a.market) : a[key];
@@ -689,6 +1129,29 @@
       return h || "—";
     }
 
+    function weightHtml(v) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) {
+        return `<span class="w-na">—</span>`;
+      }
+      const n = Number(v);
+      const cls = n >= 0.65 ? "w-hi" : n >= 0.4 ? "w-mid" : "w-lo";
+      return `<span class="w-pill ${cls}">${n.toFixed(2)}</span>`;
+    }
+
+    function evalSnippetHtml(r) {
+      const text = (r.evaluation || "").trim();
+      if (!text) return `<span class="w-na">尚未分析</span>`;
+      const time = r.analyzed_at ? `<span class="eval-time">${esc(r.analyzed_at)}</span>` : "";
+      const short = text.length > 120 ? text.slice(0, 120) + "…" : text;
+      return `<div class="eval-cell" title="${esc(text)}">${time}${esc(short)}</div>`;
+    }
+
+    function analyzeBtnHtml(r) {
+      const code = esc(r.company_id);
+      const busy = analyzingCodes.has(String(r.company_id));
+      return `<button type="button" class="btn-analyze primary" data-analyze="${code}" ${busy ? "disabled" : ""}>${busy ? "分析中…" : "訪問分析"}</button>`;
+    }
+
     function renderGeneric(rows, cols, sortKey, sortOrder, tableId) {
       if (!rows.length) {
         return `<div class="empty">尚無資料。可先「回補 24 個月歷史」或「抓取最新營收」。</div>`;
@@ -701,7 +1164,9 @@
       const body = rows.map((r) => {
         const cells = cols.map((c) => {
           if (c.key === "company_id") return `<td class="left mono">${esc(r.company_id)}</td>`;
-          if (c.key === "company_name") return `<td class="left col-name" title="${esc(r.company_name)}">${esc(r.company_name)}</td>`;
+          if (c.key === "company_name") {
+            return `<td class="left col-name">${companyNameHtml(r)}</td>`;
+          }
           if (c.key === "market_label") return `<td class="left">${marketBadge(r.market, r.market_label)}</td>`;
           if (c.key === "industry") return `<td class="left col-industry" title="${esc(r.industry)}">${esc(r.industry)}</td>`;
           if (c.key === "revenue_current") return `<td>${fmtRevenue(r.revenue_current)}</td>`;
@@ -730,6 +1195,20 @@
             return `<td class="left col-chart" data-code="${code}" data-market="${mkt}" data-chart-pending="1"><span class="chart-pending">載入中…</span></td>`;
           }
           if (c.key === "industry_yoy_pctile" || c.key === "surprise_pctile" || c.key === "anomaly_score") return `<td>${fmtNum(r[c.key], 1)}</td>`;
+          if (c.key === "pead_quality_weight" || c.key === "supply_chain_weight" || c.key === "composite_weight" || c.key === "rank_score" || c.key === "trend_weight" || c.key === "hot_now" || c.key === "persist") {
+            return `<td>${weightHtml(r[c.key])}</td>`;
+          }
+          if (c.key === "rank" || c.key === "revision") return `<td>${r[c.key] != null ? esc(r[c.key]) : "—"}</td>`;
+          if (c.key === "trend_rationale" || c.key === "rationale") {
+            const t = r[c.key] || r.trend_rationale || r.rationale || "";
+            const short = String(t).length > 100 ? String(t).slice(0, 100) + "…" : t;
+            return `<td class="left eval-cell" title="${esc(t)}">${esc(short) || "—"}</td>`;
+          }
+          if (c.key === "analyzed_at" || c.key === "trend_analyzed_at") {
+            return `<td class="left mono" style="font-size:0.75rem">${esc(r[c.key] || "—")}</td>`;
+          }
+          if (c.key === "evaluation") return `<td class="left">${evalSnippetHtml(r)}</td>`;
+          if (c.key === "visit_action") return `<td class="left">${analyzeBtnHtml(r)}</td>`;
           if (c.key.startsWith("surprise_") || c.key.startsWith("expected_")) return `<td>${fmtPct(r[c.key])}</td>`;
           if (c.key === "flags") return `<td class="left">${flagHtml(r)}</td>`;
           if (c.key === "note") return `<td class="left" style="max-width:8rem;overflow:hidden;text-overflow:ellipsis" title="${esc(r.note)}">${r.note && r.note !== "-" ? esc(r.note) : ""}</td>`;
@@ -738,6 +1217,602 @@
         return `<tr data-code="${esc(r.company_id)}">${cells}</tr>`;
       }).join("");
       return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function bindAnalyzeButtons(container) {
+      if (!container) return;
+      container.querySelectorAll("button[data-analyze]").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const code = btn.getAttribute("data-analyze");
+          if (code) runVisitAnalysis(code);
+        });
+      });
+    }
+
+    function applyAnalysisToSignalData(code, a, extra = {}) {
+      for (const key of ["extreme_growth", "surprise_turnaround", "all_long"]) {
+        const rows = signalData[key] || [];
+        for (const r of rows) {
+          if (String(r.company_id) !== String(code)) continue;
+          if (a.pead_quality_weight != null) r.pead_quality_weight = a.pead_quality_weight;
+          if (a.supply_chain_weight != null) r.supply_chain_weight = a.supply_chain_weight;
+          if (a.composite_weight != null) r.composite_weight = a.composite_weight;
+          if (a.rank_score != null) r.rank_score = a.rank_score;
+          if (a.rank != null) r.weight_rank = a.rank;
+          if (a.evaluation != null) r.evaluation = a.evaluation;
+          if (a.analyzed_at != null) r.analyzed_at = a.analyzed_at;
+          if (a.visit_analysis || a.id) r.visit_analysis = a;
+          Object.assign(r, extra);
+        }
+      }
+    }
+
+    function applyWeightsToSignalData(weights) {
+      const map = new Map((weights || []).map((w) => [String(w.company_id), w]));
+      for (const key of ["extreme_growth", "surprise_turnaround", "all_long"]) {
+        for (const r of signalData[key] || []) {
+          const w = map.get(String(r.company_id));
+          if (!w) continue;
+          r.pead_quality_weight = w.pead_quality_weight;
+          r.supply_chain_weight = w.supply_chain_weight;
+          r.composite_weight = w.composite_weight;
+          r.rank_score = w.rank_score;
+          r.weight_rank = w.rank;
+          r.weight_source = w.weight_source;
+        }
+      }
+    }
+
+    async function runVisitAnalysis(companyId, { quiet = false } = {}) {
+      const ym = $("monthSelect").value;
+      if (!ym) {
+        if (!quiet) setStatus("請先選擇月份", "error");
+        throw new Error("請先選擇月份");
+      }
+      const code = String(companyId);
+      if (analyzingCodes.has(code)) return null;
+      analyzingCodes.add(code);
+
+      let pollStarted = false;
+      if (!quiet) {
+        paintSignals();
+        setStatus(`訪問分析中：${code}（右下角視窗會顯示每步 API）…`);
+        progressKind = "single";
+        progressAbort = false;
+        activityUserMinimized = false;
+        clearActivityLogs();
+        openActivityDock({ expand: true });
+        appendActivityLines([{
+          id: 0,
+          t: new Date().toLocaleTimeString("zh-TW", { hour12: false }),
+          level: "phase",
+          msg: `▶ 單家訪問分析 ${code}`,
+        }]);
+        showProgress(true);
+        $("btnCancelProgress").hidden = true; // single request can't mid-cancel easily
+        if ($("btnActivityCancel")) $("btnActivityCancel").hidden = true;
+        // poll job logs while POST runs (server logs into job)
+        startJobPoll(null);
+        pollStarted = true;
+      }
+      try {
+        const data = await fetchJson("/api/analysis/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company_id: code, year_month: ym }),
+        });
+        if (!data.ok && data.error) throw new Error(data.error);
+        const a = data.analysis || {};
+        applyAnalysisToSignalData(code, a);
+        if (!quiet) {
+          await pollJobOnce();
+          setStatus(
+            `訪問分析完成 ${code} · PEAD ${a.pead_quality_weight ?? "—"} · 供應鏈 ${a.supply_chain_weight ?? "—"} · 綜合 ${a.composite_weight ?? "—"} · ${a.analyzed_at || ""}`,
+            a.status === "error" ? "error" : "ok"
+          );
+          if (activeTab === "analysis") await loadAnalysisList();
+        }
+        return a;
+      } catch (e) {
+        if (!quiet) setStatus(`訪問分析失敗 ${code}：${e.message}`, "error");
+        throw e;
+      } finally {
+        analyzingCodes.delete(code);
+        if (!quiet) {
+          if (pollStarted) stopJobPoll();
+          paintSignals();
+          progressKind = "";
+          setTimeout(() => {
+            if (!progressKind) showProgress(false);
+          }, 1500);
+        }
+      }
+    }
+
+    function openActivityDock({ expand = true } = {}) {
+      const dock = $("activityDock");
+      if (!dock) return;
+      dock.hidden = false;
+      dock.classList.add("is-open");
+      if (expand && !activityUserMinimized) {
+        dock.classList.remove("is-min");
+        if ($("btnActivityMin")) $("btnActivityMin").textContent = "−";
+      }
+      activityOpen = true;
+    }
+
+    function minimizeActivityDock() {
+      const dock = $("activityDock");
+      if (!dock) return;
+      dock.hidden = false;
+      dock.classList.add("is-open", "is-min");
+      activityUserMinimized = true;
+      if ($("btnActivityMin")) $("btnActivityMin").textContent = "+";
+    }
+
+    function expandActivityDock() {
+      const dock = $("activityDock");
+      if (!dock) return;
+      dock.hidden = false;
+      dock.classList.add("is-open");
+      dock.classList.remove("is-min");
+      activityUserMinimized = false;
+      if ($("btnActivityMin")) $("btnActivityMin").textContent = "−";
+    }
+
+    function closeActivityDock() {
+      const dock = $("activityDock");
+      if (!dock) return;
+      dock.classList.remove("is-open", "is-min", "live", "dead");
+      dock.hidden = true;
+      activityOpen = false;
+      activityUserMinimized = false;
+      // 關閉視窗不取消後端任務；只是不看 log
+    }
+
+    function toggleActivityMin() {
+      const dock = $("activityDock");
+      if (!dock || !dock.classList.contains("is-open")) return;
+      if (dock.classList.contains("is-min")) expandActivityDock();
+      else minimizeActivityDock();
+    }
+
+    function clearActivityLogs() {
+      lastLogId = 0;
+      const body = $("activityBody");
+      if (body) body.innerHTML = "";
+    }
+
+    function appendActivityLines(logs) {
+      const body = $("activityBody");
+      if (!body || !logs || !logs.length) return;
+      const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+      const frag = document.createDocumentFragment();
+      let added = 0;
+      for (const line of logs) {
+        if (!line || (line.id != null && line.id <= lastLogId)) continue;
+        if (line.id != null) lastLogId = Math.max(lastLogId, line.id);
+        const div = document.createElement("div");
+        div.className = `activity-line ${line.level || "info"}`;
+        const t = document.createElement("span");
+        t.className = "t";
+        t.textContent = line.t || "";
+        const m = document.createElement("span");
+        m.className = "m";
+        m.textContent = line.msg || "";
+        div.appendChild(t);
+        div.appendChild(m);
+        frag.appendChild(div);
+        added += 1;
+      }
+      if (!added) return;
+      body.appendChild(frag);
+      // cap DOM nodes
+      while (body.children.length > 400) body.removeChild(body.firstChild);
+      if (atBottom) body.scrollTop = body.scrollHeight;
+    }
+
+    function localLine(msg, level = "local") {
+      const body = $("activityBody");
+      if (!body) return;
+      const t = new Date().toLocaleTimeString("zh-TW", { hour12: false });
+      const div = document.createElement("div");
+      div.className = `activity-line ${level}`;
+      const ts = document.createElement("span");
+      ts.className = "t";
+      ts.textContent = t;
+      const m = document.createElement("span");
+      m.className = "m";
+      m.textContent = msg;
+      div.appendChild(ts);
+      div.appendChild(m);
+      body.appendChild(div);
+      while (body.children.length > 400) body.removeChild(body.firstChild);
+      body.scrollTop = body.scrollHeight;
+    }
+
+    function updateHeartbeatUI(job) {
+      const dock = $("activityDock");
+      const badge = $("activityLive");
+      const hbEl = $("activityHb");
+      const running = job && job.status === "running";
+      const age = job && job.heartbeat_age_sec != null
+        ? Number(job.heartbeat_age_sec)
+        : (lastServerHb ? (Date.now() - lastServerHb) / 1000 : 999);
+      const clientAge = lastServerHb ? (Date.now() - lastServerHb) / 1000 : 999;
+
+      if (badge) {
+        badge.classList.remove("off", "dead");
+        if (running && clientAge < 8) {
+          badge.textContent = "LIVE";
+          badge.classList.remove("off", "dead");
+        } else if (running && clientAge >= 8) {
+          badge.textContent = "STALE";
+          badge.classList.add("dead");
+        } else {
+          badge.textContent = job && job.status === "done" ? "DONE" : "IDLE";
+          badge.classList.add("off");
+        }
+      }
+      if (dock) {
+        dock.classList.toggle("live", !!(running && clientAge < 8));
+        dock.classList.toggle("dead", !!(running && clientAge >= 12));
+      }
+      if (hbEl) {
+        hbEl.classList.remove("stale", "dead");
+        if (!running) {
+          hbEl.textContent = `心跳：待命 · 上次伺服器 tick=${job && job.tick != null ? job.tick : "—"}`;
+        } else if (clientAge < 5) {
+          hbEl.textContent = `心跳：LIVE · 伺服器 ${age.toFixed(1)}s 前 · tick#${job.tick || 0} · 等待「${job.waiting_for || "—"}」`;
+        } else if (clientAge < 12) {
+          hbEl.classList.add("stale");
+          hbEl.textContent = `心跳：偏慢 ${clientAge.toFixed(0)}s 未更新 · 可能卡在 API · tick#${job.tick || 0}`;
+        } else {
+          hbEl.classList.add("dead");
+          hbEl.textContent = `心跳：可能已死 ${clientAge.toFixed(0)}s 無回應 · 請看終端機 log 或重啟 ./start.sh`;
+        }
+      }
+    }
+
+    function renderJobToUI(job) {
+      if (!job) return;
+      // 僅在使用者已開啟過視窗（或正在追蹤任務）時更新；不強制展開
+      if (activityOpen || progressKind) {
+        openActivityDock({ expand: !activityUserMinimized });
+      }
+      lastServerHb = Date.now();
+      pollFailCount = 0;
+
+      const pct = Math.round(Number(job.pct) || 0);
+      if ($("activityPct")) $("activityPct").textContent = `${pct}%`;
+      if ($("activityBar")) $("activityBar").style.width = `${pct}%`;
+      if ($("progressFill")) {
+        $("progressFill").classList.remove("indeterminate");
+        $("progressFill").style.width = `${pct}%`;
+      }
+      if ($("progressPct")) $("progressPct").textContent = `${pct}%`;
+
+      const running = job.status === "running";
+      const titleBits = [];
+      if (job.kind === "batch_top") titleBits.push("批次前30");
+      else if (job.kind === "single") titleBits.push("單家分析");
+      else titleBits.push(job.kind || "任務");
+      if (job.company_id) titleBits.push(`${job.company_id} ${job.company_name || ""}`.trim());
+      else if (job.current && job.total) titleBits.push(`${job.current}/${job.total}`);
+      if (job.waiting_for) titleBits.push(`等 ${job.waiting_for}`.slice(0, 40));
+      if ($("activityTitle")) $("activityTitle").textContent = titleBits.join(" · ");
+
+      const subMain = [
+        job.message || "",
+        job.ok != null ? `成功 ${job.ok}` : "",
+        job.fail != null ? `失敗 ${job.fail}` : "",
+        job.phase ? `階段 ${job.phase}` : "",
+      ].filter(Boolean).join(" · ");
+      // keep heartbeat line separate
+      const subEl = $("activitySub");
+      if (subEl) {
+        const hb = $("activityHb");
+        // rebuild sub content carefully
+        subEl.childNodes.forEach((n) => {
+          if (n.nodeType === 3 || (n.nodeType === 1 && n.id !== "activityHb")) {
+            // leave structure; set text on first part via replacing non-hb
+          }
+        });
+        // simpler: set HTML once
+        const hbText = hb ? hb.textContent : "";
+        subEl.innerHTML = `${esc(subMain || "…")}<div class="hb" id="activityHb">${esc(hbText || "心跳：…")}</div>`;
+      }
+      if ($("progressMeta")) $("progressMeta").textContent = subMain;
+      if ($("progressTitle")) {
+        $("progressTitle").textContent = running
+          ? (job.company_id ? `分析 ${job.company_id}` : "任務進行中")
+          : (job.status === "done" ? "完成" : job.status === "cancelled" ? "已取消" : "結束");
+      }
+
+      const dot = $("activityDot");
+      if (dot) {
+        dot.classList.remove("idle", "err");
+        if (job.status === "error") dot.classList.add("err");
+        else if (!running) dot.classList.add("idle");
+      }
+
+      const logs = job.recent || job.logs || [];
+      const fresh = logs.filter((l) => l && (l.id == null || l.id > lastLogId));
+      appendActivityLines(fresh);
+      if (job.tick != null) lastJobTick = job.tick;
+
+      if ($("btnActivityCancel")) $("btnActivityCancel").hidden = !running;
+      if ($("btnCancelProgress")) $("btnCancelProgress").hidden = !running;
+
+      updateHeartbeatUI(job);
+      if (running) showProgress(true);
+      setStatus(subMain || job.message || "任務進行中…", job.status === "error" ? "error" : "ok");
+    }
+
+    function stopJobPoll() {
+      if (jobPollTimer) {
+        clearInterval(jobPollTimer);
+        jobPollTimer = null;
+      }
+      if (localTickTimer) {
+        clearInterval(localTickTimer);
+        localTickTimer = null;
+      }
+    }
+
+    async function pollJobOnce() {
+      try {
+        const data = await fetchJson("/api/analysis/job");
+        const job = data.job;
+        if (!job) {
+          updateHeartbeatUI(null);
+          return { done: true, job: null };
+        }
+        renderJobToUI(job);
+        const done = job.status && job.status !== "running";
+        return { done, job, busy: data.busy };
+      } catch (e) {
+        pollFailCount += 1;
+        const t = new Date().toLocaleTimeString("zh-TW", { hour12: false });
+        appendActivityLines([{
+          id: lastLogId + 1,
+          t,
+          level: "error",
+          msg: `⚠ 輪詢 /api/analysis/job 失敗 #${pollFailCount}：${e.message}`,
+        }]);
+        lastLogId += 1;
+        const dock = $("activityDock");
+        if (dock) dock.classList.add("dead");
+        if ($("activityLive")) {
+          $("activityLive").textContent = "DOWN";
+          $("activityLive").classList.add("dead");
+        }
+        if ($("activityHb")) {
+          $("activityHb").classList.add("dead");
+          $("activityHb").textContent = `心跳：伺服器連線失敗 · ${e.message}`;
+        }
+        // if many fails, treat as dead job for UI purposes
+        return { done: pollFailCount > 30, job: null, error: e };
+      }
+    }
+
+    function startJobPoll(onDone) {
+      stopJobPoll();
+      // fast poll so ticks stream in
+      jobPollTimer = setInterval(async () => {
+        const r = await pollJobOnce();
+        if (r.done) {
+          stopJobPoll();
+          updateHeartbeatUI(r.job);
+          if (onDone) onDone(r.job);
+        }
+      }, 500);
+      // client-side local ticks prove the UI itself is alive
+      let localN = 0;
+      localTickTimer = setInterval(() => {
+        localN += 1;
+        if (progressKind || (lastServerHb && Date.now() - lastServerHb < 120000)) {
+          // only spam local lines when waiting long without new server log
+          const gap = lastServerHb ? (Date.now() - lastServerHb) / 1000 : 0;
+          if (gap > 2.5 && localN % 2 === 0) {
+            localLine(`…前端仍在跑 · 距上次伺服器更新 ${gap.toFixed(0)}s · 本機 tick ${localN}`, "local");
+          }
+        }
+        // refresh stale badge even without new job
+        updateHeartbeatUI(
+          progressKind
+            ? { status: "running", tick: lastJobTick, heartbeat_age_sec: lastServerHb ? (Date.now() - lastServerHb) / 1000 : 99, waiting_for: "" }
+            : null
+        );
+      }, 1000);
+    }
+
+    /** ① 背景：全部算權重 ② 前 topN 完整分析；右下角小視窗即時回報 API */
+    async function runBatchTopN(topN = 30) {
+      const ym = $("monthSelect").value;
+      if (!ym) {
+        setStatus("請先選擇月份", "error");
+        return;
+      }
+      if (progressKind === "batch" || progressKind === "backfill") {
+        setStatus("已有任務進行中，請先等待或取消", "error");
+        return;
+      }
+
+      // resume if server already busy
+      try {
+        const st = await fetchJson("/api/analysis/job");
+        if (st.busy && st.job) {
+          setStatus("偵測到伺服器上已有任務，接續顯示進度…", "ok");
+          progressKind = "batch";
+          clearActivityLogs();
+          openActivityDock();
+          renderJobToUI(st.job);
+          startJobPoll((job) => onBatchJobFinished(job));
+          return;
+        }
+      } catch (_) { /* ignore */ }
+
+      progressAbort = false;
+      progressKind = "batch";
+      const btn = $("btnBatchTop30");
+      if (btn) btn.disabled = true;
+      $("btnFetch").disabled = true;
+      $("btnBackfill").disabled = true;
+
+      clearActivityLogs();
+      openActivityDock();
+      appendActivityLines([{
+        id: 0,
+        t: new Date().toLocaleTimeString("zh-TW", { hour12: false }),
+        level: "phase",
+        msg: `▶ 啟動批次：權重全部 → 分析前 ${topN}（${ym}）`,
+      }]);
+      lastLogId = 0;
+
+      showProgress(true);
+      $("btnCancelProgress").hidden = false;
+      setProgress(0, 100, "向伺服器送出背景任務…", { title: "權重排序並分析前30" });
+
+      try {
+        const body = {
+          year_month: ym,
+          min_revenue: $("minRevenue").value || "50000",
+          top_n: topN,
+          use_glm: true,
+        };
+        const market = $("marketSelect").value;
+        if (market) body.market = market;
+
+        const start = await fetchJson("/api/analysis/batch/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!start.ok && start.error) throw new Error(start.error);
+
+        appendActivityLines([{
+          id: 0,
+          t: new Date().toLocaleTimeString("zh-TW", { hour12: false }),
+          level: "ok",
+          msg: `背景任務已啟動 job=${start.job_id || "?"} · 開始輪詢進度`,
+        }]);
+
+        // first poll immediately then interval
+        await pollJobOnce();
+        startJobPoll((job) => onBatchJobFinished(job));
+      } catch (e) {
+        setStatus("批次啟動失敗：" + e.message, "error");
+        appendActivityLines([{
+          id: lastLogId + 1,
+          t: "--",
+          level: "error",
+          msg: e.message,
+        }]);
+        progressKind = "";
+        if (btn) btn.disabled = false;
+        $("btnFetch").disabled = false;
+        $("btnBackfill").disabled = false;
+      }
+    }
+
+    async function onBatchJobFinished(job) {
+      const btn = $("btnBatchTop30");
+      if (btn) btn.disabled = false;
+      $("btnFetch").disabled = false;
+      $("btnBackfill").disabled = false;
+      if ($("btnCancelProgress")) $("btnCancelProgress").hidden = true;
+      if ($("btnActivityCancel")) $("btnActivityCancel").hidden = true;
+      progressKind = "";
+
+      if (!job) {
+        setStatus("任務結束（無狀態）", "error");
+        return;
+      }
+
+      const result = job.result || {};
+      if (result.weights) {
+        applyWeightsToSignalData(result.weights);
+        sortState.allLong = { key: "rank_score", order: "desc" };
+        sortState.extreme = { key: "rank_score", order: "desc" };
+        sortState.surprise = { key: "rank_score", order: "desc" };
+      }
+      for (const a of result.analyses || []) {
+        applyAnalysisToSignalData(a.company_id, a, {
+          rank_score: a.rank_score,
+          weight_rank: a.weight_rank,
+        });
+      }
+      paintSignals();
+
+      const ok = job.ok || 0;
+      const fail = job.fail || 0;
+      if (job.status === "done") {
+        setStatus(
+          `批次完成：成功 ${ok} · 失敗 ${fail} · 權重 ${result.scored || (result.weights || []).length} 家 · 見訪問分析報告`,
+          fail ? "error" : "ok"
+        );
+        showMainTab("analysis");
+        await loadAnalysisList();
+      } else if (job.status === "cancelled") {
+        setStatus(`已取消：成功 ${ok} · 失敗 ${fail}`, "error");
+        await loadAnalysisList();
+      } else {
+        setStatus(job.message || "任務失敗", "error");
+      }
+      setTimeout(() => {
+        if (!progressKind) showProgress(false);
+      }, 4000);
+    }
+
+    function renderAnalysisCards(items) {
+      if (!items.length) {
+        return `<div class="empty">尚無報告。請在 Long PEAD 名單對單一公司按「訪問分析」。</div>`;
+      }
+      return items.map((a) => {
+        const flags = (a.risk_flags || []).map((f) => `<span class="tag t">${esc(f)}</span>`).join(" ");
+        const us = (a.us_related_tickers || []).join(", ") || "—";
+        return `<article class="analysis-card" data-id="${a.id || ""}">
+          <h3>${esc(a.company_id)} ${esc(a.company_name || "")}
+            ${marketBadge(a.market, a.market === "L" ? "上市" : a.market === "O" ? "上櫃" : a.market)}
+          </h3>
+          <div class="meta">
+            資料月 ${esc(a.year_month || "—")} · 分析時間 <strong>${esc(a.analyzed_at || "—")}</strong>
+            · 模型 ${esc(a.model || "—")} · 狀態 ${esc(a.status || "—")}
+            · 產業 ${esc(a.industry || "—")}
+          </div>
+          <div class="weights">
+            <span>PEAD ${weightHtml(a.pead_quality_weight)}</span>
+            <span>供應鏈 ${weightHtml(a.supply_chain_weight)}</span>
+            <span>綜合 ${weightHtml(a.composite_weight)}</span>
+            ${flags ? `<span>${flags}</span>` : ""}
+          </div>
+          <div class="meta">美股相關：${esc(us)}</div>
+          <div class="eval-body">${esc(a.evaluation || "")}</div>
+        </article>`;
+      }).join("");
+    }
+
+    async function loadAnalysisList() {
+      const host = $("analysisList");
+      if (!host) return;
+      const ym = $("monthSelect").value;
+      host.innerHTML = `<div class="empty">載入報告中…</div>`;
+      try {
+        const qs = new URLSearchParams({ limit: "80" });
+        if (ym) qs.set("year_month", ym);
+        const data = await fetchJson(`/api/analysis?${qs}`);
+        analysisItems = data.items || [];
+        host.innerHTML = renderAnalysisCards(analysisItems);
+        if ($("analysisHint")) {
+          $("analysisHint").textContent =
+            `${analysisItems.length} 筆` + (ym ? ` · ${ym}` : " · 全部月份") +
+            " · 每次按分析新增一筆（含時間）";
+        }
+      } catch (e) {
+        host.innerHTML = `<div class="empty">載入失敗：${esc(e.message)}</div>`;
+      }
     }
 
     function formatAxisPrice(n) {
@@ -923,27 +1998,79 @@
       });
     }
 
+    const PEAD_PANES = {
+      extreme: {
+        key: "extreme",
+        elId: "extremeTable",
+        countId: "extremeCount",
+        hintId: "extremeHint",
+        rowsKey: "extreme_growth",
+        paneId: "pane-extreme",
+      },
+      surprise: {
+        key: "surprise",
+        elId: "surpriseTable",
+        countId: "surpriseCount",
+        hintId: "surpriseHint",
+        rowsKey: "surprise_turnaround",
+        paneId: "pane-surprise",
+      },
+      allLong: {
+        key: "allLong",
+        elId: "allLongTable",
+        countId: "allLongCount",
+        hintId: "allLongHint",
+        rowsKey: "all_long",
+        paneId: "pane-allLong",
+      },
+    };
+
+    function setPeadSubTab(name, { repaint = true } = {}) {
+      if (!PEAD_PANES[name]) name = "extreme";
+      peadSubTab = name;
+      document.querySelectorAll("#peadSubtabs button").forEach((btn) => {
+        const on = btn.dataset.pead === name;
+        btn.classList.toggle("active", on);
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      document.querySelectorAll(".pead-pane").forEach((pane) => {
+        const on = pane.dataset.peadPane === name;
+        pane.classList.toggle("active", on);
+        pane.hidden = !on;
+      });
+      if (repaint) paintSignals();
+      // 切到可見區塊頂部，避免還停在頁面很下面
+      const pane = $(PEAD_PANES[name].paneId);
+      if (pane) pane.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
     function paintSignals() {
-      const paint = (key, elId, countId, rowsKey) => {
-        const st = sortState[key];
-        const rows = sortRows(signalData[rowsKey] || [], st.key, st.order);
-        const el = $(elId);
-        el.innerHTML = renderGeneric(rows, COLS_SIG, st.key, st.order, key);
-        $(countId).textContent = `${rows.length} 家 · 排序：${st.key} ${st.order === "desc" ? "↓" : "↑"}`;
-        bindSort(el, key, (col) => {
-          if (st.key === col) st.order = st.order === "desc" ? "asc" : "desc";
-          else {
-            st.key = col;
-            st.order = "desc";
-          }
-          paintSignals();
-        });
-        // 不 await：背景補圖
-        hydrateCharts(el);
-      };
-      paint("extreme", "extremeTable", "extremeCount", "extreme_growth");
-      paint("surprise", "surpriseTable", "surpriseCount", "surprise_turnaround");
-      paint("allLong", "allLongTable", "allLongCount", "all_long");
+      // 更新三個子 tab 的家數；只完整繪製目前可見子頁（省補圖流量）
+      for (const [name, cfg] of Object.entries(PEAD_PANES)) {
+        const n = (signalData[cfg.rowsKey] || []).length;
+        $(cfg.countId).textContent = String(n);
+      }
+
+      const cfg = PEAD_PANES[peadSubTab] || PEAD_PANES.extreme;
+      const st = sortState[cfg.key];
+      const rows = sortRows(signalData[cfg.rowsKey] || [], st.key, st.order);
+      const el = $(cfg.elId);
+      el.innerHTML = renderGeneric(rows, COLS_SIG, st.key, st.order, cfg.key);
+      if ($(cfg.hintId)) {
+        $(cfg.hintId).textContent =
+          `${rows.length} 家 · 排序：${st.key} ${st.order === "desc" ? "↓" : "↑"} · 點欄位可排序`;
+      }
+      bindSort(el, cfg.key, (col) => {
+        if (col === "visit_action" || col === "evaluation") return;
+        if (st.key === col) st.order = st.order === "desc" ? "asc" : "desc";
+        else {
+          st.key = col;
+          st.order = "desc";
+        }
+        paintSignals();
+      });
+      bindAnalyzeButtons(el);
+      hydrateCharts(el);
     }
 
     function paintAll() {
@@ -991,6 +2118,11 @@
       const qs = new URLSearchParams({ year_month: ym, min_revenue: $("minRevenue").value || "0" });
       const market = $("marketSelect").value;
       if (market) qs.set("market", market);
+      const useFilter = $("chkTrendFilter") ? $("chkTrendFilter").checked : true;
+      qs.set("apply_trend_filter", useFilter ? "1" : "0");
+      if (useFilter) {
+        qs.set("min_trend_weight", ($("minTrendWeight") && $("minTrendWeight").value) || "0.45");
+      }
       const data = await loadSignalsWithFallback(qs);
       if (data.error) {
         setStatus(data.error, "error");
@@ -1027,32 +2159,199 @@
     }
 
     async function loadAll() {
+      const host = $("allTable");
       const ym = $("monthSelect").value;
       if (!ym) {
         allRows = [];
-        paintAll();
+        if (host) host.innerHTML = `<div class="empty">請先選擇資料月份，或按「抓取最新營收」。</div>`;
+        if ($("allCount")) $("allCount").textContent = "—";
         return;
       }
-      const qs = new URLSearchParams({ year_month: ym, sort: "yoy_pct", order: "desc", limit: "10000" });
+      if (host) host.innerHTML = `<div class="empty">載入 ${esc(ym)} 營收明細中…</div>`;
+      setStatus(`載入營收明細 ${ym}…`);
+      try {
+        const qs = new URLSearchParams({
+          year_month: ym,
+          sort: sortKeyAll || "yoy_pct",
+          order: sortOrderAll || "desc",
+          limit: "10000",
+        });
+        const market = $("marketSelect").value;
+        if (market) qs.set("market", market);
+        const data = await fetchJson(`/api/revenue?${qs}`);
+        if (data.error) {
+          setStatus(data.error, "error");
+          if (host) host.innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+          return;
+        }
+        // 營收明細：顯示該月全部公司（不套用「最低營收」門檻，那是 Long PEAD 用的）
+        allRows = data.rows || [];
+        paintAll();
+        setStatus(
+          `營收明細 ${data.label || ym} · ${allRows.length} 筆 · 新台幣千元（全部，未套用最低營收門檻）`,
+          "ok"
+        );
+      } catch (e) {
+        setStatus("營收明細載入失敗：" + e.message, "error");
+        if (host) host.innerHTML = `<div class="empty">載入失敗：${esc(e.message)}</div>`;
+      }
+    }
+
+    function showMainTab(name) {
+      const allowed = ["ranking", "trend", "signals", "all", "analysis"];
+      activeTab = allowed.includes(name) ? name : "ranking";
+      document.querySelectorAll(".tabs > button[data-tab]").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === activeTab);
+      });
+      const map = {
+        ranking: $("tab-ranking"),
+        trend: $("tab-trend"),
+        signals: $("tab-signals"),
+        all: $("tab-all"),
+        analysis: $("tab-analysis"),
+      };
+      for (const [key, el] of Object.entries(map)) {
+        if (!el) continue;
+        const hide = activeTab !== key;
+        el.classList.toggle("is-hidden", hide);
+        el.hidden = hide;
+      }
+    }
+
+    async function loadRanking() {
+      const ym = $("monthSelect").value;
+      const host = $("rankingTable");
+      if (!ym) {
+        if (host) host.innerHTML = `<div class="empty">請先選擇月份</div>`;
+        return;
+      }
+      if (host) host.innerHTML = `<div class="empty">載入 Ranking…</div>`;
+      const qs = new URLSearchParams({
+        year_month: ym,
+        top_n: "30",
+        min_revenue: $("minRevenue").value || "50000",
+        min_trend_weight: ($("minTrendWeight") && $("minTrendWeight").value) || "0.45",
+      });
       const market = $("marketSelect").value;
       if (market) qs.set("market", market);
-      const data = await fetchJson(`/api/revenue?${qs}`);
-      if (data.error) {
-        setStatus(data.error, "error");
+      try {
+        const data = await fetchJson(`/api/ranking?${qs}`);
+        const rows = data.ranking || [];
+        if (host) {
+          host.innerHTML = renderGeneric(rows, COLS_RANK, "rank_score", "desc", "rank");
+        }
+        if ($("rankingHint")) {
+          $("rankingHint").textContent =
+            `${rows.length} 家 · 候選 ${data.candidate_count || 0} · E∪S ${data.all_long_count || 0}` +
+            (data.trend_run ? ` · run ${data.trend_run.run_id || ""}` : " · 尚無趨勢 run");
+        }
+        setStatus(
+          rows.length
+            ? `Ranking 30 已載入（${data.label || ym}）`
+            : `尚無 Ranking：請先 Run 趨勢權重，且需有 E/S 並過趨勢門檻`,
+          rows.length ? "ok" : "error"
+        );
+      } catch (e) {
+        if (host) host.innerHTML = `<div class="empty">失敗：${esc(e.message)}</div>`;
+        setStatus("Ranking 失敗：" + e.message, "error");
+      }
+    }
+
+    async function loadTrendTable() {
+      const ym = $("monthSelect").value;
+      const host = $("trendTable");
+      if (!ym) {
+        if (host) host.innerHTML = `<div class="empty">請先選擇月份</div>`;
         return;
       }
-      allRows = data.rows || [];
-      const minRev = Number($("minRevenue").value || 0);
-      if (minRev > 0) {
-        allRows = allRows.filter((r) => r.revenue_current != null && Number(r.revenue_current) >= minRev);
+      if (host) host.innerHTML = `<div class="empty">載入趨勢…</div>`;
+      try {
+        const data = await fetchJson(`/api/trend?year_month=${encodeURIComponent(ym)}&limit=3000`);
+        const items = data.items || [];
+        if (host) {
+          host.innerHTML = renderGeneric(items, COLS_TREND, "trend_weight", "desc", "trend");
+        }
+        const th = data.theme || {};
+        if ($("themeBox")) {
+          $("themeBox").innerHTML =
+            `<strong>Theme Pack</strong>（run ${esc((data.run && data.run.run_id) || "—")}）<br/>` +
+            esc(th.summary_zh || "尚無摘要。請按「本月 Run 趨勢權重」。");
+        }
+        if ($("trendHint")) {
+          $("trendHint").textContent = `${items.length} 家 · 完成 run 後才有完整權重`;
+        }
+        setStatus(`趨勢表 ${items.length} 家`, "ok");
+      } catch (e) {
+        if (host) host.innerHTML = `<div class="empty">失敗：${esc(e.message)}</div>`;
+        setStatus("趨勢載入失敗：" + e.message, "error");
       }
-      paintAll();
-      setStatus(`營收明細 ${data.label} · ${allRows.length} 筆 · 新台幣千元`, "ok");
+    }
+
+    async function runTrendMonthly() {
+      const ym = $("monthSelect").value;
+      if (!ym) {
+        setStatus("請先選擇月份", "error");
+        return;
+      }
+      if (progressKind === "batch" || progressKind === "backfill") {
+        setStatus("已有任務進行中", "error");
+        return;
+      }
+      progressKind = "batch";
+      activityUserMinimized = false;
+      clearActivityLogs();
+      openActivityDock({ expand: true });
+      localLine(`▶ 啟動本月趨勢權重 run（${ym}）· 平行處理`, "phase");
+      showProgress(true);
+      if ($("btnCancelProgress")) $("btnCancelProgress").hidden = false;
+      ["btnTrendRun", "btnTrendRun2", "btnFetch", "btnBackfill"].forEach((id) => {
+        if ($(id)) $(id).disabled = true;
+      });
+      try {
+        const body = {
+          year_month: ym,
+          min_revenue: 0,
+          concurrency: 50,
+        };
+        const start = await fetchJson("/api/trend/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!start.ok && start.error) throw new Error(start.error);
+        localLine(`背景任務 job=${start.job_id} concurrency=${start.concurrency}`, "ok");
+        await pollJobOnce();
+        startJobPoll(async (job) => {
+          progressKind = "";
+          ["btnTrendRun", "btnTrendRun2", "btnFetch", "btnBackfill"].forEach((id) => {
+            if ($(id)) $(id).disabled = false;
+          });
+          if ($("btnCancelProgress")) $("btnCancelProgress").hidden = true;
+          setStatus(job && job.message ? job.message : "趨勢 run 結束", job && job.status === "done" ? "ok" : "error");
+          await loadTrendTable();
+          await loadRanking();
+          showMainTab("ranking");
+          setTimeout(() => showProgress(false), 3000);
+        });
+      } catch (e) {
+        progressKind = "";
+        setStatus("啟動失敗：" + e.message, "error");
+        ["btnTrendRun", "btnTrendRun2", "btnFetch", "btnBackfill"].forEach((id) => {
+          if ($(id)) $(id).disabled = false;
+        });
+      }
     }
 
     async function refreshView() {
-      if (activeTab === "signals") await loadSignals();
-      else await loadAll();
+      try {
+        if (activeTab === "ranking") await loadRanking();
+        else if (activeTab === "trend") await loadTrendTable();
+        else if (activeTab === "signals") await loadSignals();
+        else if (activeTab === "analysis") await loadAnalysisList();
+        else await loadAll();
+      } catch (e) {
+        setStatus("載入失敗：" + e.message, "error");
+      }
     }
 
     async function fetchLatest() {
@@ -1084,18 +2383,28 @@
       if (!show) {
         $("progressFill").style.width = "0%";
         $("progressFill").classList.remove("indeterminate");
-        $("btnCancelBackfill").hidden = true;
+        if ($("btnCancelProgress")) $("btnCancelProgress").hidden = true;
       }
     }
 
-    function setProgress(done, total, meta) {
-      const pct = total > 0 ? Math.round((100 * done) / total) : 0;
+    function setProgress(done, total, meta, opts = {}) {
+      const pct = total > 0 ? Math.min(100, Math.round((100 * done) / total)) : 0;
       $("progressPct").textContent = `${pct}%`;
       $("progressFill").classList.remove("indeterminate");
       $("progressFill").style.width = `${pct}%`;
       $("progressMeta").textContent = meta || "";
-      $("progressTitle").textContent =
-        done >= total ? "回補完成" : `回補歷史中… ${done}/${total}`;
+      if (opts.title) {
+        $("progressTitle").textContent = opts.title;
+      } else if (progressKind === "batch") {
+        $("progressTitle").textContent =
+          done >= total ? "批次分析完成" : `批次分析中… ${pct}%`;
+      } else if (progressKind === "backfill") {
+        $("progressTitle").textContent =
+          done >= total ? "回補完成" : `回補歷史中… ${done}/${total}`;
+      } else {
+        $("progressTitle").textContent =
+          done >= total ? "完成" : `處理中… ${pct}%`;
+      }
     }
 
     /** 前端自算近 N 個「資料月」（預設到上個月），不依賴 backfill_plan 路由 */
@@ -1157,9 +2466,12 @@
       if (!confirm("將從公開資訊觀測站回補近 24 個月上市+上櫃（已齊月份會跳過）。可能需數分鐘，確定？")) return;
 
       backfillAbort = false;
+      progressAbort = false;
+      progressKind = "backfill";
       $("btnBackfill").disabled = true;
       $("btnFetch").disabled = true;
-      $("btnCancelBackfill").hidden = false;
+      if ($("btnBatchTop30")) $("btnBatchTop30").disabled = true;
+      if ($("btnCancelProgress")) $("btnCancelProgress").hidden = false;
       showProgress(true);
       $("progressTitle").textContent = "回補歷史中…";
       $("progressPct").textContent = "…";
@@ -1275,9 +2587,11 @@
         $("progressTitle").textContent = "回補失敗";
         $("progressFill").classList.remove("indeterminate");
       } finally {
+        progressKind = "";
         $("btnBackfill").disabled = false;
         $("btnFetch").disabled = false;
-        $("btnCancelBackfill").hidden = true;
+        if ($("btnBatchTop30")) $("btnBatchTop30").disabled = false;
+        if ($("btnCancelProgress")) $("btnCancelProgress").hidden = true;
         setTimeout(() => showProgress(false), 2500);
       }
     }
@@ -1337,6 +2651,20 @@
             ? " · <strong>頁面與後端版本字串不同，建議強制重新整理 (Cmd+Shift+R)</strong>"
             : "");
         console.info("server", st.version, st.features, st.api_routes);
+        // 不自動開活動視窗、不自動開始分析。僅在狀態列提示可手動接上。
+        try {
+          const jr = await fetchJson("/api/analysis/job");
+          if (jr.busy && jr.job && jr.job.status === "running") {
+            setStatus(
+              `伺服器有任務進行中（${jr.job.kind || "job"} ${Math.round(jr.job.pct || 0)}%）。若要看日誌請再按一次「本月 Run」旁的狀態，或先取消後重跑。不會自動開小視窗。`,
+              "ok"
+            );
+          } else {
+            setStatus("就緒。請手動按「本月 Run 趨勢權重」才會開始分析。", "ok");
+          }
+        } catch (_) {
+          setStatus("就緒。", "ok");
+        }
       } catch (e) {
         banner.className = "server-banner bad";
         banner.innerHTML =
@@ -1352,28 +2680,69 @@
     $("btnFetch").addEventListener("click", fetchLatest);
     $("btnBackfill").addEventListener("click", backfill24);
     $("btnQuotes").addEventListener("click", refreshQuotes);
-    $("btnCancelBackfill").addEventListener("click", () => {
-      backfillAbort = true;
-      $("progressMeta").textContent = "正在取消（等目前這個月跑完）…";
-      setStatus("取消中…等目前月份結束", "error");
+    if ($("btnTrendRun")) $("btnTrendRun").addEventListener("click", () => runTrendMonthly());
+    if ($("btnTrendRun2")) $("btnTrendRun2").addEventListener("click", () => runTrendMonthly());
+    if ($("btnReloadRanking")) $("btnReloadRanking").addEventListener("click", () => loadRanking());
+    if ($("btnReloadTrend")) $("btnReloadTrend").addEventListener("click", () => loadTrendTable());
+    if ($("chkTrendFilter")) $("chkTrendFilter").addEventListener("change", () => {
+      if (activeTab === "signals") loadSignals();
     });
+    if ($("minTrendWeight")) $("minTrendWeight").addEventListener("change", () => {
+      if (activeTab === "ranking") loadRanking();
+      if (activeTab === "signals") loadSignals();
+    });
+    async function cancelCurrentJob() {
+      progressAbort = true;
+      backfillAbort = true;
+      $("progressMeta").textContent = "正在取消（等目前這一步跑完）…";
+      setStatus("取消中…等目前步驟結束", "error");
+      try {
+        await fetchJson("/api/analysis/job/cancel", { method: "POST" });
+      } catch (_) { /* ignore */ }
+    }
+    if ($("btnCancelProgress")) {
+      $("btnCancelProgress").addEventListener("click", () => cancelCurrentJob());
+    }
+    if ($("btnActivityCancel")) {
+      $("btnActivityCancel").addEventListener("click", () => cancelCurrentJob());
+    }
+    if ($("btnActivityMin")) {
+      $("btnActivityMin").addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleActivityMin();
+      });
+    }
+    if ($("btnActivityClose")) {
+      $("btnActivityClose").addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeActivityDock();
+      });
+    }
     $("btnReload").addEventListener("click", refreshView);
     $("btnDownloadDb").addEventListener("click", () => { window.location.href = "/api/download-db"; });
     $("btnCsvExtreme").addEventListener("click", () => downloadCsv("extreme_growth"));
     $("btnCsvSurprise").addEventListener("click", () => downloadCsv("surprise_turnaround"));
     $("btnCsvAll").addEventListener("click", () => downloadCsv("all_long"));
+    if ($("btnReloadAnalysis")) {
+      $("btnReloadAnalysis").addEventListener("click", () => loadAnalysisList());
+    }
     $("monthSelect").addEventListener("change", refreshView);
     $("marketSelect").addEventListener("change", refreshView);
     $("minRevenue").addEventListener("change", refreshView);
 
-    document.querySelectorAll(".tabs button").forEach((btn) => {
+    document.querySelectorAll(".tabs > button[data-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        activeTab = btn.dataset.tab;
-        $("tab-signals").hidden = activeTab !== "signals";
-        $("tab-all").hidden = activeTab !== "all";
+        const name = btn.dataset.tab || "signals";
+        showMainTab(name);
         refreshView();
+      });
+    });
+
+    document.querySelectorAll("#peadSubtabs button[data-pead]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setPeadSubTab(btn.dataset.pead, { repaint: true });
       });
     });
 

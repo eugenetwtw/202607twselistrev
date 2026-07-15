@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from io import StringIO
@@ -22,7 +24,23 @@ import pandas as pd
 import requests
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
+from analysis_service import (
+    analyze_company,
+    batch_score_weights,
+    config_status as analysis_config_status,
+    load_dotenv,
+)
+from company_service import company_service
+import job_progress
 from price_service import price_service
+from trend_service import (
+    build_theme_pack,
+    rank_score_row,
+    score_companies_parallel,
+    trend_concurrency,
+)
+
+load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -99,6 +117,77 @@ def init_db() -> None:
             ON monthly_revenue(year_month, industry);
         CREATE INDEX IF NOT EXISTS idx_revenue_yoy
             ON monthly_revenue(year_month, yoy_pct);
+
+        -- 訪問分析：Brave+Firecrawl+GLM，每次按一下寫一筆（含時間）
+        CREATE TABLE IF NOT EXISTS visit_analysis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id TEXT NOT NULL,
+            company_name TEXT,
+            market TEXT,
+            industry TEXT,
+            year_month TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL,
+            pead_quality_weight REAL,
+            supply_chain_weight REAL,
+            composite_weight REAL,
+            evaluation TEXT,
+            risk_flags TEXT,
+            us_related_tickers TEXT,
+            confidence REAL,
+            sources_json TEXT,
+            model TEXT,
+            raw_json TEXT,
+            status TEXT,
+            error_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_visit_company_ym
+            ON visit_analysis(company_id, year_month, analyzed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_visit_ym
+            ON visit_analysis(year_month, analyzed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS trend_run (
+            run_id TEXT PRIMARY KEY,
+            year_month TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT,
+            theme_summary_json TEXT,
+            company_count INTEGER,
+            ok_count INTEGER,
+            fail_count INTEGER,
+            concurrency INTEGER,
+            app_version TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_trend_run_ym
+            ON trend_run(year_month, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS company_trend (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            company_id TEXT NOT NULL,
+            company_name TEXT,
+            market TEXT,
+            industry TEXT,
+            year_month TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            trend_weight REAL,
+            hot_now REAL,
+            persist REAL,
+            supply_chain_weight REAL,
+            rationale TEXT,
+            us_related_tickers TEXT,
+            sources_json TEXT,
+            analyzed_at TEXT NOT NULL,
+            model TEXT,
+            status TEXT,
+            error_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_trend_ym_w
+            ON company_trend(year_month, trend_weight DESC);
+        CREATE INDEX IF NOT EXISTS idx_company_trend_run
+            ON company_trend(run_id);
+        CREATE INDEX IF NOT EXISTS idx_company_trend_code_ym
+            ON company_trend(company_id, year_month, revision DESC);
         """
     )
     conn.commit()
@@ -375,10 +464,12 @@ def ensure_both_markets(
     *,
     min_count: int = 50,
     force: bool = False,
+    markets: tuple[str, ...] | list[str] = ("L", "O"),
 ) -> dict[str, Any]:
     """
-    確保某年月同時有上市 + 上櫃。
-    若某一邊缺資料（或筆數過少），用 MOPS 彙總表補抓。
+    確保某年月有上市 / 上櫃營收。
+    - force=False：僅在家數 < min_count 時用 MOPS 補
+    - force=True：強制用 MOPS 整包 upsert（覆蓋／補齊晚公告公司，如台積電）
     """
     counts = market_counts(db, year_month)
     result: dict[str, Any] = {
@@ -387,20 +478,26 @@ def ensure_both_markets(
         "before": dict(counts),
         "filled": [],
         "errors": [],
+        "force": force,
     }
-    for market in ("L", "O"):
+    for market in markets:
+        if market not in ("L", "O"):
+            continue
         need = force or counts.get(market, 0) < min_count
         if not need:
             continue
         try:
             rows = fetch_mops_month(market, year_month)
             n = upsert_rows(db, rows)
+            # force 後更新 counts，避免同 loop 誤判
+            counts = market_counts(db, year_month)
             result["filled"].append(
                 {
                     "market": market,
                     "market_label": MARKET_LABEL[market],
                     "fetched": n,
                     "source": "mops",
+                    "forced": force,
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -408,9 +505,12 @@ def ensure_both_markets(
                 {"market": market, "error": str(exc), "source": "mops"}
             )
     result["after"] = market_counts(db, year_month)
+    # 完整度：上市家數接近全市場（避免 900 家就當齊、漏掉晚申報）
+    full_l = 1000
+    full_o = 750
     result["complete"] = (
-        result["after"].get("L", 0) >= min_count
-        and result["after"].get("O", 0) >= min_count
+        result["after"].get("L", 0) >= full_l
+        and result["after"].get("O", 0) >= full_o
     )
     return result
 
@@ -797,6 +897,28 @@ def serialize_signal_row(r: dict) -> dict:
     out["quote_as_of"] = r.get("quote_as_of")
     out["quote_source"] = r.get("quote_source")
     out["history_points"] = r.get("history_points")
+    # 訪問分析 / 趨勢權重
+    for k in (
+        "pead_quality_weight",
+        "supply_chain_weight",
+        "composite_weight",
+        "evaluation",
+        "analyzed_at",
+        "trend_weight",
+        "hot_now",
+        "persist",
+        "trend_rationale",
+        "trend_run_id",
+        "trend_revision",
+        "trend_analyzed_at",
+        "rank_score",
+    ):
+        if k in r:
+            out[k] = r.get(k)
+    if r.get("us_related_tickers") is not None:
+        out["us_related_tickers"] = r.get("us_related_tickers")
+    if r.get("visit_analysis"):
+        out["visit_analysis"] = r["visit_analysis"]
     return out
 
 
@@ -849,11 +971,13 @@ def list_months(db: sqlite3.Connection) -> list[dict]:
         ORDER BY year_month DESC
         """
     )
+    # 完整度門檻：避免 OpenAPI 僅 ~900 家就當齊（漏台積電等晚申報）
+    FULL_L, FULL_O = 1000, 750
     out = []
     for r in cur.fetchall():
         n_l = int(r["n_listed"] or 0)
         n_o = int(r["n_otc"] or 0)
-        complete = n_l > 0 and n_o > 0
+        complete = n_l >= FULL_L and n_o >= FULL_O
         out.append(
             {
                 "year_month": r["year_month"],
@@ -1002,6 +1126,10 @@ def serialize_row(r: dict) -> dict:
     out = dict(r)
     out["market_label"] = MARKET_LABEL.get(r.get("market"), r.get("market"))
     out["year_month_label"] = format_ym_display(r.get("year_month") or "")
+    # 官網（點名稱連外）
+    code = str(out.get("company_id") or "").strip()
+    if not out.get("website") and code:
+        out["website"] = company_service.get_website(code)
     for k in (
         "revenue_current",
         "revenue_prev_month",
@@ -1025,7 +1153,160 @@ def serialize_row(r: dict) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2026-07-12-long-pead-chart-axes"
+APP_VERSION = "2026-07-15-dock-fix"
+
+
+def save_visit_analysis(db: sqlite3.Connection, result: dict[str, Any]) -> int:
+    cur = db.execute(
+        """
+        INSERT INTO visit_analysis (
+            company_id, company_name, market, industry, year_month, analyzed_at,
+            pead_quality_weight, supply_chain_weight, composite_weight,
+            evaluation, risk_flags, us_related_tickers, confidence,
+            sources_json, model, raw_json, status, error_message
+        ) VALUES (
+            :company_id, :company_name, :market, :industry, :year_month, :analyzed_at,
+            :pead_quality_weight, :supply_chain_weight, :composite_weight,
+            :evaluation, :risk_flags, :us_related_tickers, :confidence,
+            :sources_json, :model, :raw_json, :status, :error_message
+        )
+        """,
+        {
+            "company_id": result["company_id"],
+            "company_name": result.get("company_name"),
+            "market": result.get("market"),
+            "industry": result.get("industry"),
+            "year_month": result["year_month"],
+            "analyzed_at": result["analyzed_at"],
+            "pead_quality_weight": result.get("pead_quality_weight"),
+            "supply_chain_weight": result.get("supply_chain_weight"),
+            "composite_weight": result.get("composite_weight"),
+            "evaluation": result.get("evaluation"),
+            "risk_flags": json.dumps(result.get("risk_flags") or [], ensure_ascii=False),
+            "us_related_tickers": json.dumps(
+                result.get("us_related_tickers") or [], ensure_ascii=False
+            ),
+            "confidence": result.get("confidence"),
+            "sources_json": json.dumps(result.get("sources_json") or {}, ensure_ascii=False),
+            "model": result.get("model"),
+            "raw_json": json.dumps(result.get("raw_json") or {}, ensure_ascii=False),
+            "status": result.get("status") or "ok",
+            "error_message": result.get("error_message"),
+        },
+    )
+    db.commit()
+    return int(cur.lastrowid)
+
+
+def _parse_json_field(raw: Any, default: Any) -> Any:
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, (list, dict)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def serialize_visit_analysis(row: sqlite3.Row | dict, *, include_sources: bool = True) -> dict:
+    r = dict(row)
+    out = {
+        "id": r.get("id"),
+        "company_id": r.get("company_id"),
+        "company_name": r.get("company_name"),
+        "market": r.get("market"),
+        "industry": r.get("industry"),
+        "year_month": r.get("year_month"),
+        "analyzed_at": r.get("analyzed_at"),
+        "pead_quality_weight": r.get("pead_quality_weight"),
+        "supply_chain_weight": r.get("supply_chain_weight"),
+        "composite_weight": r.get("composite_weight"),
+        "evaluation": r.get("evaluation"),
+        "risk_flags": _parse_json_field(r.get("risk_flags"), []),
+        "us_related_tickers": _parse_json_field(r.get("us_related_tickers"), []),
+        "confidence": r.get("confidence"),
+        "model": r.get("model"),
+        "status": r.get("status"),
+        "error_message": r.get("error_message"),
+    }
+    if include_sources:
+        out["sources"] = _parse_json_field(r.get("sources_json"), {})
+    return out
+
+
+def fetch_latest_analyses(
+    db: sqlite3.Connection,
+    year_month: str,
+    company_ids: list[str] | None = None,
+) -> dict[str, dict]:
+    """Return latest visit_analysis per company_id for a year_month."""
+    if company_ids is not None and not company_ids:
+        return {}
+    if company_ids:
+        # SQLite variable limit — chunk if needed
+        out: dict[str, dict] = {}
+        chunk = 400
+        for i in range(0, len(company_ids), chunk):
+            part = company_ids[i : i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = db.execute(
+                f"""
+                SELECT v.*
+                FROM visit_analysis v
+                INNER JOIN (
+                    SELECT company_id, MAX(id) AS max_id
+                    FROM visit_analysis
+                    WHERE year_month = ? AND company_id IN ({ph})
+                    GROUP BY company_id
+                ) t ON v.id = t.max_id
+                """,
+                [year_month, *part],
+            ).fetchall()
+            for row in rows:
+                s = serialize_visit_analysis(row, include_sources=False)
+                out[str(s["company_id"])] = s
+        return out
+    rows = db.execute(
+        """
+        SELECT v.*
+        FROM visit_analysis v
+        INNER JOIN (
+            SELECT company_id, MAX(id) AS max_id
+            FROM visit_analysis
+            WHERE year_month = ?
+            GROUP BY company_id
+        ) t ON v.id = t.max_id
+        """,
+        (year_month,),
+    ).fetchall()
+    return {
+        str(serialize_visit_analysis(row, include_sources=False)["company_id"]): serialize_visit_analysis(
+            row, include_sources=False
+        )
+        for row in rows
+    }
+
+
+def attach_analysis_to_rows(db: sqlite3.Connection, ym: str, rows: list[dict]) -> None:
+    ids = [str(r.get("company_id") or "") for r in rows if r.get("company_id")]
+    latest = fetch_latest_analyses(db, ym, ids)
+    for r in rows:
+        a = latest.get(str(r.get("company_id") or ""))
+        if not a:
+            r["visit_analysis"] = None
+            r["pead_quality_weight"] = None
+            r["supply_chain_weight"] = None
+            r["composite_weight"] = None
+            r["evaluation"] = None
+            r["analyzed_at"] = None
+            continue
+        r["visit_analysis"] = a
+        r["pead_quality_weight"] = a.get("pead_quality_weight")
+        r["supply_chain_weight"] = a.get("supply_chain_weight")
+        r["composite_weight"] = a.get("composite_weight")
+        r["evaluation"] = a.get("evaluation")
+        r["analyzed_at"] = a.get("analyzed_at")
 
 
 @app.route("/")
@@ -1070,6 +1351,11 @@ def api_revenue():
 
     db = get_db()
     rows = query_rows(db, ym, market=market, industry=industry, sort=sort, order=order, limit=limit)
+    try:
+        company_service.ensure()
+        company_service.attach(rows)
+    except Exception:
+        pass
     return jsonify(
         {
             "year_month": ym,
@@ -1116,22 +1402,26 @@ def api_anomalies():
 @app.post("/api/fetch")
 def api_fetch():
     """
-    1) 抓上市 + 上櫃 OpenAPI 最新月
-    2) 對出現的每個資料年月，若缺另一邊市場，用 MOPS 彙總表補齊
-       → 同一月份可同時有上市 + 上櫃
+    1) 抓上市 + 上櫃 OpenAPI 最新月（可能不完整，會漏晚公告公司）
+    2) **強制**對 OpenAPI 出現的每個資料年月，用 MOPS 彙總整包覆蓋上市+上櫃
+       → 補上如台積電等已公告但尚未進 OpenAPI 的公司
+    3) （可選）DB 內其他「未齊」舊月份再輕量補齊（不 force）
     """
     body = request.get_json(silent=True) or {}
     markets = body.get("markets") or ["L", "O"]
     markets = [m for m in markets if m in API_URLS]
     if not markets:
         return jsonify({"error": "markets 無效"}), 400
-    # 是否對「已存在但未齊」的舊月份也補齊（預設 True）
+    # 是否對「已存在但未齊」的舊月份也補齊（預設 True；這些不 force）
     fill_all_incomplete = body.get("fill_all_incomplete", True)
+    # 抓取最新後是否強制 MOPS 覆蓋當月（預設 True）
+    force_mops_latest = body.get("force_mops_latest", True)
 
     db = get_db()
     summary = []
     errors = []
     all_ym: set[str] = set()
+    openapi_yms: set[str] = set()
 
     for market in markets:
         try:
@@ -1139,6 +1429,7 @@ def api_fetch():
             n = upsert_rows(db, rows)
             yms = sorted({r["year_month"] for r in rows})
             all_ym.update(yms)
+            openapi_yms.update(yms)
             summary.append(
                 {
                     "market": market,
@@ -1152,31 +1443,56 @@ def api_fetch():
         except Exception as exc:  # noqa: BLE001 — surface to UI
             errors.append({"market": market, "error": str(exc), "source": "openapi"})
 
-    # 補齊：本次抓到的月份 +（可選）DB 內所有未齊月份
-    ym_to_fill = set(all_ym)
+    fill_results = []
+
+    # 關鍵：OpenAPI 當月一律強制 MOPS 覆蓋（上市+上櫃）
+    if force_mops_latest and openapi_yms:
+        for ym in sorted(openapi_yms):
+            fr = ensure_both_markets(
+                db, ym, min_count=50, force=True, markets=("L", "O")
+            )
+            fr["reason"] = "force_mops_after_openapi"
+            fill_results.append(fr)
+            if fr["errors"]:
+                errors.extend(
+                    {
+                        "market": e["market"],
+                        "error": f"{fr['label']}: {e['error']}",
+                        "source": "mops",
+                    }
+                    for e in fr["errors"]
+                )
+            all_ym.add(ym)
+
+    # 其他未齊舊月：只補缺，不 force（避免每次掃 24 個月）
     if fill_all_incomplete:
         for m in list_months(db):
-            if not m["complete"]:
-                ym_to_fill.add(m["year_month"])
-
-    fill_results = []
-    for ym in sorted(ym_to_fill):
-        fr = ensure_both_markets(db, ym, min_count=50, force=False)
-        fill_results.append(fr)
-        if fr["errors"]:
-            errors.extend(
-                {
-                    "market": e["market"],
-                    "error": f"{fr['label']}: {e['error']}",
-                    "source": "mops",
-                }
-                for e in fr["errors"]
-            )
-        all_ym.add(ym)
+            ym = m["year_month"]
+            if ym in openapi_yms:
+                continue
+            if m["complete"]:
+                continue
+            fr = ensure_both_markets(db, ym, min_count=50, force=False)
+            fr["reason"] = "fill_incomplete"
+            fill_results.append(fr)
+            if fr["errors"]:
+                errors.extend(
+                    {
+                        "market": e["market"],
+                        "error": f"{fr['label']}: {e['error']}",
+                        "source": "mops",
+                    }
+                    for e in fr["errors"]
+                )
+            all_ym.add(ym)
 
     months = list_months(db)
-    # 預設建議：最新「已齊」月份，否則最新月份
-    preferred = next((m["year_month"] for m in months if m["complete"]), None)
+    # 預設建議：優先 OpenAPI 最新月，否則最新已齊月
+    preferred = None
+    if openapi_yms:
+        preferred = sorted(openapi_yms)[-1]
+    if not preferred:
+        preferred = next((m["year_month"] for m in months if m["complete"]), None)
     if not preferred and months:
         preferred = months[0]["year_month"]
 
@@ -1185,6 +1501,7 @@ def api_fetch():
             "ok": len(errors) == 0,
             "summary": summary,
             "fill": fill_results,
+            "force_mops_latest": force_mops_latest,
             "errors": errors,
             "year_months": sorted(all_ym),
             "preferred_year_month": preferred,
@@ -1409,6 +1726,11 @@ def api_backfill():
 def _attach_prices(rows: list[dict], *, allow_network_history: bool = False) -> list[dict]:
     """掛上收盤／漲跌／近六月／QuickChart（歷史優先用磁碟快取）。"""
     try:
+        company_service.ensure()
+        company_service.attach(rows)
+    except Exception:
+        pass
+    try:
         price_service.ensure_quotes()
         price_service.enrich_rows(
             rows, allow_network_history=allow_network_history, max_network=0
@@ -1422,29 +1744,142 @@ def _attach_prices(rows: list[dict], *, allow_network_history: bool = False) -> 
     return rows
 
 
-def _signals_json_response(ym: str, market: str | None, min_revenue: float):
+def fetch_latest_trends_map(
+    db: sqlite3.Connection, year_month: str
+) -> dict[str, dict[str, Any]]:
+    """最新一筆 company_trend（依 id 最大） per company_id。"""
+    rows = db.execute(
+        """
+        SELECT t.*
+        FROM company_trend t
+        INNER JOIN (
+            SELECT company_id, MAX(id) AS max_id
+            FROM company_trend
+            WHERE year_month = ?
+            GROUP BY company_id
+        ) x ON t.id = x.max_id
+        """,
+        (year_month,),
+    ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        r = dict(row)
+        code = str(r.get("company_id") or "")
+        out[code] = {
+            "trend_weight": r.get("trend_weight"),
+            "hot_now": r.get("hot_now"),
+            "persist": r.get("persist"),
+            "supply_chain_weight": r.get("supply_chain_weight"),
+            "trend_rationale": r.get("rationale"),
+            "us_related_tickers": _parse_json_field(r.get("us_related_tickers"), []),
+            "trend_run_id": r.get("run_id"),
+            "trend_revision": r.get("revision"),
+            "trend_analyzed_at": r.get("analyzed_at"),
+        }
+    return out
+
+
+def attach_trends_to_rows(
+    db: sqlite3.Connection, ym: str, rows: list[dict]
+) -> None:
+    m = fetch_latest_trends_map(db, ym)
+    for r in rows:
+        t = m.get(str(r.get("company_id") or ""))
+        if not t:
+            r["trend_weight"] = None
+            r["supply_chain_weight"] = None
+            r["hot_now"] = None
+            r["persist"] = None
+            continue
+        r.update(t)
+        r["rank_score"] = rank_score_row(
+            anomaly_score=r.get("anomaly_score"),
+            trend_weight=t.get("trend_weight"),
+            supply_chain_weight=t.get("supply_chain_weight"),
+            is_e=bool(r.get("is_extreme_growth")),
+            is_s=bool(r.get("is_surprise_long")),
+        )
+
+
+def _filter_by_trend(
+    rows: list[dict],
+    *,
+    min_trend: float | None,
+    min_supply: float | None,
+    require_trend: bool,
+) -> list[dict]:
+    if not require_trend and min_trend is None and min_supply is None:
+        return rows
+    out = []
+    for r in rows:
+        tw = r.get("trend_weight")
+        sw = r.get("supply_chain_weight")
+        if require_trend and tw is None and sw is None:
+            continue
+        if min_trend is not None:
+            if tw is None or float(tw) < min_trend:
+                continue
+        if min_supply is not None:
+            if sw is None or float(sw) < min_supply:
+                continue
+        out.append(r)
+    return out
+
+
+def _signals_json_response(
+    ym: str,
+    market: str | None,
+    min_revenue: float,
+    *,
+    min_trend_weight: float | None = 0.45,
+    min_supply_weight: float | None = None,
+    apply_trend_filter: bool = True,
+):
     db = get_db()
     raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
-    # 先掛報價 + 快取內歷史；缺圖由表前端逐檔 /api/price/<code> 補
     for key in ("extreme_growth", "surprise_turnaround", "all_long"):
         _attach_prices(raw[key], allow_network_history=False)
+        attach_analysis_to_rows(db, ym, raw[key])
+        attach_trends_to_rows(db, ym, raw[key])
+
+    filtered = {}
+    for key in ("extreme_growth", "surprise_turnaround", "all_long"):
+        rows = raw[key]
+        if apply_trend_filter:
+            rows = _filter_by_trend(
+                rows,
+                min_trend=min_trend_weight,
+                min_supply=min_supply_weight,
+                require_trend=True,
+            )
+        filtered[key] = rows
+
     return {
         "version": APP_VERSION,
         "year_month": raw["year_month"],
         "label": raw["label"],
         "universe": raw["universe"],
-        "params": raw["params"],
+        "params": {
+            **raw["params"],
+            "min_trend_weight": min_trend_weight,
+            "min_supply_weight": min_supply_weight,
+            "apply_trend_filter": apply_trend_filter,
+        },
         "quote_as_of": price_service.quote_as_of,
         "counts": {
-            "extreme_growth": len(raw["extreme_growth"]),
-            "surprise_turnaround": len(raw["surprise_turnaround"]),
-            "all_long": len(raw["all_long"]),
+            "extreme_growth": len(filtered["extreme_growth"]),
+            "surprise_turnaround": len(filtered["surprise_turnaround"]),
+            "all_long": len(filtered["all_long"]),
+            "extreme_growth_raw": len(raw["extreme_growth"]),
+            "surprise_turnaround_raw": len(raw["surprise_turnaround"]),
+            "all_long_raw": len(raw["all_long"]),
         },
-        "extreme_growth": [serialize_signal_row(r) for r in raw["extreme_growth"]],
+        "extreme_growth": [serialize_signal_row(r) for r in filtered["extreme_growth"]],
         "surprise_turnaround": [
-            serialize_signal_row(r) for r in raw["surprise_turnaround"]
+            serialize_signal_row(r) for r in filtered["surprise_turnaround"]
         ],
-        "all_long": [serialize_signal_row(r) for r in raw["all_long"]],
+        "all_long": [serialize_signal_row(r) for r in filtered["all_long"]],
+        "analysis_config": analysis_config_status(),
     }
 
 
@@ -1452,7 +1887,7 @@ def _signals_json_response(ym: str, market: str | None, min_revenue: float):
 @app.get("/api/long_pead")
 @app.get("/api/pead")
 def api_signals():
-    """Long PEAD：極端成長 + 驚喜/轉折（S1+S2）。多路徑別名避免舊行程混淆。"""
+    """Long PEAD：預設先過趨勢過濾再回 E/S。"""
     ym = request.args.get("year_month", "").strip()
     if not ym:
         return jsonify({"error": "缺少 year_month", "version": APP_VERSION}), 400
@@ -1461,7 +1896,35 @@ def api_signals():
         min_revenue = float(request.args.get("min_revenue", 50_000))
     except ValueError:
         min_revenue = 50_000
-    return jsonify(_signals_json_response(ym, market, min_revenue))
+    apply_filter = str(request.args.get("apply_trend_filter", "1")).lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    min_trend = None
+    min_supply = None
+    if request.args.get("min_trend_weight") not in (None, ""):
+        try:
+            min_trend = float(request.args.get("min_trend_weight"))
+        except ValueError:
+            min_trend = 0.45
+    elif apply_filter:
+        min_trend = 0.45
+    if request.args.get("min_supply_weight") not in (None, ""):
+        try:
+            min_supply = float(request.args.get("min_supply_weight"))
+        except ValueError:
+            min_supply = None
+    return jsonify(
+        _signals_json_response(
+            ym,
+            market,
+            min_revenue,
+            min_trend_weight=min_trend,
+            min_supply_weight=min_supply,
+            apply_trend_filter=apply_filter,
+        )
+    )
 
 
 @app.get("/api/signals.csv")
@@ -1571,6 +2034,13 @@ def api_quotes_refresh():
     return jsonify({"version": APP_VERSION, **result})
 
 
+@app.post("/api/companies/refresh")
+def api_companies_refresh():
+    """重新抓上市/上櫃基本資料（含官網網址）。"""
+    result = company_service.refresh()
+    return jsonify({"version": APP_VERSION, **result})
+
+
 @app.get("/api/price/<code>")
 def api_price_one(code: str):
     """單一股票：收盤、漲跌%、近六月漲跌%、QuickChart URL。"""
@@ -1606,11 +2076,917 @@ def api_price_one(code: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# 趨勢權重 + Ranking 30
+# ---------------------------------------------------------------------------
+
+_db_write_lock = threading.Lock()
+
+
+def _next_revision(conn: sqlite3.Connection, company_id: str, year_month: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(revision), 0) AS m
+        FROM company_trend
+        WHERE company_id = ? AND year_month = ?
+        """,
+        (company_id, year_month),
+    ).fetchone()
+    return int(row["m"] or 0) + 1
+
+
+def _save_company_trend(conn: sqlite3.Connection, run_id: str, result: dict[str, Any]) -> int:
+    rev = _next_revision(conn, str(result["company_id"]), str(result["year_month"]))
+    cur = conn.execute(
+        """
+        INSERT INTO company_trend (
+            run_id, company_id, company_name, market, industry, year_month, revision,
+            trend_weight, hot_now, persist, supply_chain_weight, rationale,
+            us_related_tickers, sources_json, analyzed_at, model, status, error_message
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            run_id,
+            result.get("company_id"),
+            result.get("company_name"),
+            result.get("market"),
+            result.get("industry"),
+            result.get("year_month"),
+            rev,
+            result.get("trend_weight"),
+            result.get("hot_now"),
+            result.get("persist"),
+            result.get("supply_chain_weight"),
+            result.get("rationale"),
+            json.dumps(result.get("us_related_tickers") or [], ensure_ascii=False),
+            json.dumps(result.get("sources_json") or {}, ensure_ascii=False),
+            result.get("analyzed_at"),
+            result.get("model"),
+            result.get("status") or "ok",
+            result.get("error_message"),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _run_monthly_trend_job(
+    *,
+    ym: str,
+    min_revenue: float,
+    concurrency: int,
+) -> None:
+    step = job_progress.make_step_callback()
+    conn = _db_connect()
+    run_id = ""
+    try:
+        j0 = job_progress.get_job() or {}
+        run_id = str(j0.get("id") or f"tr{int(time.time())}")
+        started = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+        job_progress.set_progress(pct=1, phase="load", message=f"載入 {ym} 有營收公司…")
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT * FROM monthly_revenue
+                WHERE year_month = ?
+                  AND revenue_current IS NOT NULL
+                  AND (? <= 0 OR revenue_current >= ?)
+                """,
+                (ym, min_revenue, min_revenue),
+            ).fetchall()
+        ]
+        # 同 code 多 market 取一列
+        by_code: dict[str, dict] = {}
+        for r in rows:
+            cid = str(r.get("company_id") or "")
+            if cid and cid not in by_code:
+                by_code[cid] = r
+        companies = list(by_code.values())
+        step("ok", f"宇宙 {len(companies)} 家（min_revenue={min_revenue}）")
+
+        conn.execute(
+            """
+            INSERT INTO trend_run (
+                run_id, year_month, started_at, status, company_count,
+                concurrency, app_version
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (run_id, ym, started, "running", len(companies), concurrency, APP_VERSION),
+        )
+        conn.commit()
+
+        theme = build_theme_pack(on_step=step)
+        conn.execute(
+            "UPDATE trend_run SET theme_summary_json = ? WHERE run_id = ?",
+            (json.dumps(theme, ensure_ascii=False), run_id),
+        )
+        conn.commit()
+
+        job_progress.set_progress(
+            pct=8,
+            phase="score",
+            total=len(companies),
+            current=0,
+            message=f"【2/3】並行打趨勢+供應鏈權重 · 並發 {concurrency}",
+        )
+        step("phase", f"並行評分 {len(companies)} 家 · concurrency={concurrency}")
+
+        ok_n = 0
+        fail_n = 0
+
+        def on_done(result: dict, done: int, total: int) -> None:
+            nonlocal ok_n, fail_n
+            with _db_write_lock:
+                try:
+                    _save_company_trend(conn, run_id, result)
+                    conn.commit()
+                except Exception as e:
+                    step("error", f"寫入失敗 {result.get('company_id')}: {e}")
+                    fail_n += 1
+                    job_progress.bump_fail()
+                    return
+            if (result.get("status") or "") == "error":
+                fail_n += 1
+                job_progress.bump_fail()
+            else:
+                ok_n += 1
+                job_progress.bump_ok()
+            pct = 8 + 90 * done / max(total, 1)
+            code = result.get("company_id")
+            job_progress.set_progress(
+                pct=pct,
+                phase="score",
+                current=done,
+                total=total,
+                company_id=str(code or ""),
+                company_name=str(result.get("company_name") or ""),
+                message=None,
+            )
+            # 節流 log：每 10 家或前 5 家
+            if done <= 5 or done % 10 == 0 or done == total:
+                step(
+                    "ok" if result.get("status") != "error" else "warn",
+                    f"[{done}/{total}] {code} T={result.get('trend_weight')} "
+                    f"SC={result.get('supply_chain_weight')} "
+                    f"{(result.get('rationale') or '')[:60]}",
+                )
+
+        score_companies_parallel(
+            companies,
+            theme,
+            concurrency=concurrency,
+            should_cancel=job_progress.should_cancel,
+            on_company_done=on_done,
+        )
+
+        if job_progress.should_cancel():
+            conn.execute(
+                """
+                UPDATE trend_run SET status=?, finished_at=?, ok_count=?, fail_count=?
+                WHERE run_id=?
+                """,
+                (
+                    "cancelled",
+                    datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+                    ok_n,
+                    fail_n,
+                    run_id,
+                ),
+            )
+            conn.commit()
+            job_progress.finish_job(
+                "cancelled",
+                message=f"已取消 · 成功 {ok_n} · 失敗 {fail_n}",
+                result={"run_id": run_id, "year_month": ym, "ok": ok_n, "fail": fail_n},
+            )
+            return
+
+        finished = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        conn.execute(
+            """
+            UPDATE trend_run SET status=?, finished_at=?, ok_count=?, fail_count=?
+            WHERE run_id=?
+            """,
+            ("done", finished, ok_n, fail_n, run_id),
+        )
+        conn.commit()
+        step("phase", "【3/3】可開啟 Ranking 30 / PEAD 過濾")
+        job_progress.finish_job(
+            "done",
+            message=f"趨勢 run 完成 {run_id} · 成功 {ok_n} · 失敗 {fail_n} · 宇宙 {len(companies)}",
+            result={
+                "run_id": run_id,
+                "year_month": ym,
+                "ok": ok_n,
+                "fail": fail_n,
+                "company_count": len(companies),
+                "theme_summary": theme.get("summary_zh"),
+            },
+        )
+    except Exception as e:
+        step("error", f"趨勢 job 例外：{e}")
+        try:
+            if run_id:
+                conn.execute(
+                    "UPDATE trend_run SET status=?, finished_at=? WHERE run_id=?",
+                    (
+                        "error",
+                        datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+                        run_id,
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+        job_progress.finish_job("error", message=str(e))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/trend/run")
+def api_trend_run():
+    """背景：Theme Pack + 並行趨勢/供應鏈權重（當月有營收公司）。"""
+    if job_progress.is_busy():
+        return jsonify(
+            {"ok": False, "error": "已有任務進行中", "job": job_progress.get_job(), "version": APP_VERSION}
+        ), 409
+    payload = request.get_json(silent=True) or {}
+    ym = str(payload.get("year_month") or "").strip()
+    if not ym:
+        return jsonify({"error": "需要 year_month", "version": APP_VERSION}), 400
+    try:
+        min_revenue = float(payload.get("min_revenue", 0))
+    except (TypeError, ValueError):
+        min_revenue = 0.0
+    try:
+        concurrency = int(payload.get("concurrency") or trend_concurrency())
+    except (TypeError, ValueError):
+        concurrency = trend_concurrency()
+    concurrency = max(1, min(concurrency, 1000))
+
+    try:
+        job_id = job_progress.start_job(
+            "trend_monthly",
+            meta={"year_month": ym, "min_revenue": min_revenue, "concurrency": concurrency},
+        )
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e), "version": APP_VERSION}), 409
+
+    # job id 當 run_id 前綴對齊
+    t = threading.Thread(
+        target=_run_monthly_trend_job,
+        kwargs={"ym": ym, "min_revenue": min_revenue, "concurrency": concurrency},
+        daemon=True,
+        name=f"trend-{job_id}",
+    )
+    # 讓 job id 寫入 DB：在 worker 內用 get_job id
+    t.start()
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "version": APP_VERSION,
+            "message": "趨勢權重背景任務已啟動（平行）",
+            "concurrency": concurrency,
+        }
+    )
+
+
+@app.get("/api/trend")
+def api_trend_list():
+    """列出某月最新趨勢權重（每公司最新 revision）。"""
+    ym = (request.args.get("year_month") or "").strip()
+    if not ym:
+        return jsonify({"error": "需要 year_month", "version": APP_VERSION}), 400
+    try:
+        min_w = float(request.args.get("min_trend_weight", 0) or 0)
+    except ValueError:
+        min_w = 0.0
+    limit = min(int(request.args.get("limit") or 5000), 10000)
+    db = get_db()
+    run = db.execute(
+        """
+        SELECT * FROM trend_run
+        WHERE year_month = ? AND status = 'done'
+        ORDER BY started_at DESC LIMIT 1
+        """,
+        (ym,),
+    ).fetchone()
+    rows = db.execute(
+        """
+        SELECT t.*
+        FROM company_trend t
+        INNER JOIN (
+            SELECT company_id, MAX(id) AS max_id
+            FROM company_trend WHERE year_month = ?
+            GROUP BY company_id
+        ) x ON t.id = x.max_id
+        WHERE (? <= 0 OR t.trend_weight >= ?)
+        ORDER BY t.trend_weight DESC, t.supply_chain_weight DESC
+        LIMIT ?
+        """,
+        (ym, min_w, min_w, limit),
+    ).fetchall()
+    items = []
+    for row in rows:
+        r = dict(row)
+        items.append(
+            {
+                "id": r.get("id"),
+                "run_id": r.get("run_id"),
+                "company_id": r.get("company_id"),
+                "company_name": r.get("company_name"),
+                "market": r.get("market"),
+                "industry": r.get("industry"),
+                "year_month": r.get("year_month"),
+                "revision": r.get("revision"),
+                "trend_weight": r.get("trend_weight"),
+                "hot_now": r.get("hot_now"),
+                "persist": r.get("persist"),
+                "supply_chain_weight": r.get("supply_chain_weight"),
+                "rationale": r.get("rationale"),
+                "us_related_tickers": _parse_json_field(r.get("us_related_tickers"), []),
+                "analyzed_at": r.get("analyzed_at"),
+                "model": r.get("model"),
+                "status": r.get("status"),
+            }
+        )
+    theme = None
+    run_info = None
+    if run:
+        run_info = dict(run)
+        theme = _parse_json_field(run_info.get("theme_summary_json"), {})
+    return jsonify(
+        {
+            "ok": True,
+            "version": APP_VERSION,
+            "year_month": ym,
+            "run": run_info,
+            "theme": theme,
+            "items": items,
+            "count": len(items),
+        }
+    )
+
+
+@app.get("/api/ranking")
+def api_ranking():
+    """Top 30：anomaly + trend + supply_chain；須有 E 或 S。"""
+    ym = (request.args.get("year_month") or "").strip()
+    if not ym:
+        return jsonify({"error": "需要 year_month", "version": APP_VERSION}), 400
+    market = request.args.get("market") or None
+    try:
+        min_revenue = float(request.args.get("min_revenue", 50_000))
+    except ValueError:
+        min_revenue = 50_000
+    try:
+        min_trend = float(request.args.get("min_trend_weight", 0.45))
+    except ValueError:
+        min_trend = 0.45
+    try:
+        top_n = int(request.args.get("top_n", 30))
+    except ValueError:
+        top_n = 30
+    top_n = max(1, min(top_n, 100))
+
+    db = get_db()
+    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
+    pool = raw.get("all_long") or []
+    attach_trends_to_rows(db, ym, pool)
+    # 必須有趨勢資料且過門檻，且本來就是 E∪S
+    cand = []
+    for r in pool:
+        tw = r.get("trend_weight")
+        if tw is None or float(tw) < min_trend:
+            continue
+        if not (r.get("is_extreme_growth") or r.get("is_surprise_long")):
+            continue
+        r["rank_score"] = rank_score_row(
+            anomaly_score=r.get("anomaly_score"),
+            trend_weight=r.get("trend_weight"),
+            supply_chain_weight=r.get("supply_chain_weight"),
+            is_e=bool(r.get("is_extreme_growth")),
+            is_s=bool(r.get("is_surprise_long")),
+        )
+        cand.append(r)
+    cand.sort(
+        key=lambda x: (
+            float(x.get("rank_score") or 0),
+            float(x.get("trend_weight") or 0),
+            float(x.get("supply_chain_weight") or 0),
+            float(x.get("anomaly_score") or 0),
+        ),
+        reverse=True,
+    )
+    top = cand[:top_n]
+    for i, r in enumerate(top, 1):
+        r["rank"] = i
+
+    run = db.execute(
+        """
+        SELECT run_id, started_at, finished_at, status FROM trend_run
+        WHERE year_month = ? ORDER BY started_at DESC LIMIT 1
+        """,
+        (ym,),
+    ).fetchone()
+
+    return jsonify(
+        {
+            "ok": True,
+            "version": APP_VERSION,
+            "year_month": ym,
+            "label": raw.get("label"),
+            "top_n": top_n,
+            "min_trend_weight": min_trend,
+            "candidate_count": len(cand),
+            "all_long_count": len(pool),
+            "trend_run": dict(run) if run else None,
+            "weights": {
+                "anomaly": 0.30,
+                "trend": 0.35,
+                "supply_chain": 0.35,
+            },
+            "ranking": [serialize_signal_row(r) for r in top],
+        }
+    )
+
+
+def _enrich_company_for_analysis(
+    db: sqlite3.Connection, company: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach PEAD feature fields if the name is in the long-signal lists."""
+    code = str(company.get("company_id") or "")
+    ym = str(company.get("year_month") or "")
+    if not code or not ym:
+        return company
+    try:
+        full = compute_long_signals(db, ym, min_revenue=0, market=None)
+        for lst in (
+            full.get("all_long") or [],
+            full.get("extreme_growth") or [],
+            full.get("surprise_turnaround") or [],
+        ):
+            for r in lst:
+                if str(r.get("company_id")) == code:
+                    for k, v in r.items():
+                        if k in ("spark_points", "chart_url"):
+                            continue
+                        company[k] = v
+                    return company
+    except Exception:
+        pass
+    company.setdefault("is_extreme_growth", False)
+    company.setdefault("is_surprise_long", False)
+    return company
+
+
+def _db_connect() -> sqlite3.Connection:
+    """Thread-safe standalone connection (not Flask g)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _analysis_payload(result: dict[str, Any], rid: int) -> dict[str, Any]:
+    return {
+        "id": rid,
+        "company_id": result["company_id"],
+        "company_name": result.get("company_name"),
+        "market": result.get("market"),
+        "industry": result.get("industry"),
+        "year_month": result["year_month"],
+        "analyzed_at": result["analyzed_at"],
+        "pead_quality_weight": result.get("pead_quality_weight"),
+        "supply_chain_weight": result.get("supply_chain_weight"),
+        "composite_weight": result.get("composite_weight"),
+        "evaluation": result.get("evaluation"),
+        "risk_flags": result.get("risk_flags") or [],
+        "us_related_tickers": result.get("us_related_tickers") or [],
+        "confidence": result.get("confidence"),
+        "model": result.get("model"),
+        "status": result.get("status"),
+        "error_message": result.get("error_message"),
+        "sources": result.get("sources_json") or {},
+    }
+
+
+def _run_batch_top_job(
+    *,
+    ym: str,
+    market: str | None,
+    min_revenue: float,
+    top_n: int,
+    use_glm: bool,
+) -> None:
+    """Background worker: score all → analyze top N with live job_progress logs."""
+    step = job_progress.make_step_callback()
+    conn = _db_connect()
+    try:
+        job_progress.set_progress(
+            pct=2, phase="signals", message=f"載入 {ym} Long PEAD 訊號…"
+        )
+        raw = compute_long_signals(conn, ym, min_revenue=min_revenue, market=market)
+        universe = raw.get("all_long") or []
+        step("ok", f"E∪S 名單 {len(universe)} 家（universe 計算完成）")
+
+        job_progress.set_progress(
+            pct=5, phase="weights", message="階段 1/2：計算全部權重…"
+        )
+        scored = batch_score_weights(universe, use_glm=use_glm, on_step=step)
+        top = scored[:top_n]
+        job_progress.set_progress(
+            pct=12,
+            phase="analyze",
+            total=len(top),
+            current=0,
+            message=f"權重完成 {len(scored)} 家 → 深入前 {len(top)} 家",
+        )
+        step("phase", f"階段 2/2：完整訪問分析前 {len(top)} 家")
+
+        analyses: list[dict] = []
+        for i, item in enumerate(top):
+            if job_progress.should_cancel():
+                jsnap = job_progress.get_job() or {}
+                job_progress.finish_job(
+                    "cancelled",
+                    message=f"已取消（成功 {jsnap.get('ok', 0)} · 失敗 {jsnap.get('fail', 0)}）",
+                    result={
+                        "weights": scored,
+                        "top": top,
+                        "analyses": analyses,
+                        "year_month": ym,
+                    },
+                )
+                return
+
+            code = str(item.get("company_id") or "")
+            name = str(item.get("company_name") or "")
+            pct = 12 + (88 * i) / max(len(top), 1)
+            job_progress.set_progress(
+                pct=pct,
+                phase="analyze",
+                current=i + 1,
+                total=len(top),
+                company_id=code,
+                company_name=name,
+                message=f"分析 {i + 1}/{len(top)}：{code} {name}",
+            )
+            step("phase", f"━━ {i + 1}/{len(top)} {code} {name} ━━")
+
+            row = conn.execute(
+                """
+                SELECT * FROM monthly_revenue
+                WHERE company_id = ? AND year_month = ?
+                ORDER BY market ASC LIMIT 1
+                """,
+                (code, ym),
+            ).fetchone()
+            if not row:
+                step("error", f"{code} 找不到營收列，跳過")
+                job_progress.bump_fail()
+                continue
+
+            company = _enrich_company_for_analysis(conn, dict(row))
+            # keep rank from batch
+            company["rank_score"] = item.get("rank_score")
+            try:
+                result = analyze_company(company, on_step=step)
+                rid = save_visit_analysis(conn, result)
+                payload = _analysis_payload(result, rid)
+                payload["rank_score"] = item.get("rank_score")
+                payload["weight_rank"] = item.get("rank")
+                analyses.append(payload)
+                job_progress.bump_ok()
+                step(
+                    "ok",
+                    f"✓ {code} 已寫入 DB · PEAD={result.get('pead_quality_weight')} "
+                    f"供應鏈={result.get('supply_chain_weight')}",
+                )
+            except Exception as e:
+                job_progress.bump_fail()
+                step("error", f"✗ {code} 失敗：{e}")
+
+            done_pct = 12 + (88 * (i + 1)) / max(len(top), 1)
+            job_progress.set_progress(pct=done_pct)
+
+        j = job_progress.get_job() or {}
+        job_progress.finish_job(
+            "done",
+            message=f"批次完成：成功 {j.get('ok', 0)} · 失敗 {j.get('fail', 0)} · 報告 {len(analyses)} 筆",
+            result={
+                "weights": scored,
+                "top": top,
+                "top_ids": [r["company_id"] for r in top],
+                "analyses": analyses,
+                "year_month": ym,
+                "label": raw.get("label"),
+                "scored": len(scored),
+            },
+        )
+    except Exception as e:
+        job_progress.log("error", f"任務例外：{e}")
+        job_progress.finish_job("error", message=str(e))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/analysis/weights")
+def api_analysis_weights():
+    """為當月全部 Long PEAD（E∪S）估算權重並排序（無完整網頁；可選 GLM 批次）。"""
+    payload = request.get_json(silent=True) or {}
+    ym = str(payload.get("year_month") or request.args.get("year_month") or "").strip()
+    if not ym:
+        return jsonify({"error": "需要 year_month", "version": APP_VERSION}), 400
+    market = payload.get("market") or request.args.get("market") or None
+    if market == "":
+        market = None
+    try:
+        min_revenue = float(
+            payload.get("min_revenue", request.args.get("min_revenue", 50_000))
+        )
+    except (TypeError, ValueError):
+        min_revenue = 50_000
+    use_glm = str(payload.get("use_glm", "1")).lower() not in ("0", "false", "no")
+    try:
+        top_n = int(payload.get("top_n") or request.args.get("top_n") or 30)
+    except (TypeError, ValueError):
+        top_n = 30
+    top_n = max(1, min(top_n, 100))
+
+    db = get_db()
+    raw = compute_long_signals(db, ym, min_revenue=min_revenue, market=market)
+    universe = raw.get("all_long") or []
+    scored = batch_score_weights(universe, use_glm=use_glm)
+    top = scored[:top_n]
+    return jsonify(
+        {
+            "ok": True,
+            "version": APP_VERSION,
+            "year_month": ym,
+            "label": raw.get("label"),
+            "universe": len(universe),
+            "scored": len(scored),
+            "top_n": top_n,
+            "use_glm": use_glm,
+            "weights": scored,
+            "top": top,
+            "top_ids": [r["company_id"] for r in top],
+        }
+    )
+
+
+@app.post("/api/analysis/batch/start")
+def api_analysis_batch_start():
+    """背景執行：全部權重 → 前 N 完整分析。前端輪詢 /api/analysis/job。"""
+    if job_progress.is_busy():
+        j = job_progress.get_job()
+        return jsonify(
+            {
+                "ok": False,
+                "error": "已有任務進行中",
+                "job": j,
+                "version": APP_VERSION,
+            }
+        ), 409
+
+    payload = request.get_json(silent=True) or {}
+    ym = str(payload.get("year_month") or "").strip()
+    if not ym:
+        return jsonify({"error": "需要 year_month", "version": APP_VERSION}), 400
+    market = payload.get("market") or None
+    if market == "":
+        market = None
+    try:
+        min_revenue = float(payload.get("min_revenue", 50_000))
+    except (TypeError, ValueError):
+        min_revenue = 50_000
+    use_glm = str(payload.get("use_glm", "1")).lower() not in ("0", "false", "no")
+    try:
+        top_n = int(payload.get("top_n") or 30)
+    except (TypeError, ValueError):
+        top_n = 30
+    top_n = max(1, min(top_n, 100))
+
+    try:
+        job_id = job_progress.start_job(
+            "batch_top",
+            meta={
+                "year_month": ym,
+                "market": market,
+                "min_revenue": min_revenue,
+                "top_n": top_n,
+                "use_glm": use_glm,
+            },
+        )
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e), "version": APP_VERSION}), 409
+
+    t = threading.Thread(
+        target=_run_batch_top_job,
+        kwargs={
+            "ym": ym,
+            "market": market,
+            "min_revenue": min_revenue,
+            "top_n": top_n,
+            "use_glm": use_glm,
+        },
+        daemon=True,
+        name=f"batch-{job_id}",
+    )
+    t.start()
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "version": APP_VERSION,
+            "message": "背景任務已啟動，請輪詢 /api/analysis/job",
+        }
+    )
+
+
+@app.get("/api/analysis/job")
+def api_analysis_job():
+    """目前／最近一次任務進度 + 活動日誌（給前端小視窗）。"""
+    j = job_progress.get_job()
+    return jsonify({"ok": True, "job": j, "version": APP_VERSION, "busy": job_progress.is_busy()})
+
+
+@app.post("/api/analysis/job/cancel")
+def api_analysis_job_cancel():
+    ok = job_progress.request_cancel()
+    return jsonify({"ok": ok, "version": APP_VERSION, "job": job_progress.get_job()})
+
+
+@app.post("/api/analysis/job/reset")
+def api_analysis_job_reset():
+    """強制清掉卡住的任務狀態（例如 cancel 後 thread 已死）。"""
+    j = job_progress.get_job()
+    if j and j.get("status") == "running":
+        job_progress.request_cancel()
+        job_progress.finish_job("cancelled", message="強制 reset")
+    elif j:
+        job_progress.finish_job(j.get("status") or "cancelled", message="reset")
+    # hard clear
+    with job_progress._lock:  # noqa: SLF001
+        job_progress._job = None  # type: ignore[attr-defined]
+    return jsonify({"ok": True, "version": APP_VERSION, "job": None})
+
+
+@app.post("/api/analysis/run")
+def api_analysis_run():
+    """執行一次訪問分析（Brave + Firecrawl + GLM），寫入 DB 含時間戳。"""
+    payload = request.get_json(silent=True) or {}
+    code = str(
+        payload.get("company_id") or request.args.get("company_id") or ""
+    ).strip()
+    ym = str(payload.get("year_month") or request.args.get("year_month") or "").strip()
+    if not code or not ym:
+        return jsonify({"error": "需要 company_id 與 year_month", "version": APP_VERSION}), 400
+
+    # optional: log into job console even for single run if not busy
+    use_console = not job_progress.is_busy()
+    if use_console:
+        try:
+            job_progress.start_job("single", meta={"company_id": code, "year_month": ym})
+        except RuntimeError:
+            use_console = False
+
+    step = job_progress.make_step_callback() if use_console else None
+    if use_console:
+        job_progress.set_progress(
+            pct=5,
+            phase="analyze",
+            current=1,
+            total=1,
+            company_id=code,
+            message=f"單家訪問分析 {code}",
+        )
+
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT * FROM monthly_revenue
+        WHERE company_id = ? AND year_month = ?
+        ORDER BY market ASC
+        LIMIT 1
+        """,
+        (code, ym),
+    ).fetchone()
+    if not row:
+        if use_console:
+            job_progress.finish_job("error", message=f"找不到 {code} @ {ym}")
+        return jsonify({"error": f"找不到 {code} @ {ym} 營收列", "version": APP_VERSION}), 404
+
+    company = _enrich_company_for_analysis(db, dict(row))
+
+    try:
+        result = analyze_company(company, on_step=step)
+        rid = save_visit_analysis(db, result)
+        analysis = _analysis_payload(result, rid)
+        if use_console:
+            job_progress.bump_ok()
+            job_progress.finish_job(
+                "done",
+                message=f"{code} 分析完成",
+                result={"analysis": analysis},
+            )
+        return jsonify({"ok": True, "version": APP_VERSION, "analysis": analysis})
+    except Exception as e:
+        if use_console:
+            job_progress.finish_job("error", message=str(e))
+        return jsonify({"ok": False, "error": str(e), "version": APP_VERSION}), 500
+
+
+@app.get("/api/analysis")
+def api_analysis_get():
+    """查詢訪問分析：latest=1 取最新，或 list 該月。"""
+    db = get_db()
+    code = (request.args.get("company_id") or "").strip()
+    ym = (request.args.get("year_month") or "").strip()
+    latest = (request.args.get("latest") or "1") == "1"
+    limit = min(int(request.args.get("limit") or 50), 200)
+
+    if code and ym and latest:
+        row = db.execute(
+            """
+            SELECT * FROM visit_analysis
+            WHERE company_id = ? AND year_month = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (code, ym),
+        ).fetchone()
+        if not row:
+            return jsonify({"ok": True, "analysis": None, "version": APP_VERSION})
+        return jsonify(
+            {
+                "ok": True,
+                "analysis": serialize_visit_analysis(row, include_sources=True),
+                "version": APP_VERSION,
+            }
+        )
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if code:
+        clauses.append("company_id = ?")
+        params.append(code)
+    if ym:
+        clauses.append("year_month = ?")
+        params.append(ym)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = db.execute(
+        f"""
+        SELECT id, company_id, company_name, market, industry, year_month, analyzed_at,
+               pead_quality_weight, supply_chain_weight, composite_weight,
+               evaluation, risk_flags, us_related_tickers, confidence,
+               model, status, error_message
+        FROM visit_analysis
+        {where}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    ).fetchall()
+    items = [serialize_visit_analysis(r, include_sources=False) for r in rows]
+    return jsonify({"ok": True, "items": items, "count": len(items), "version": APP_VERSION})
+
+
+@app.get("/api/analysis/<int:analysis_id>")
+def api_analysis_detail(analysis_id: int):
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM visit_analysis WHERE id = ?", (analysis_id,)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found", "version": APP_VERSION}), 404
+    return jsonify(
+        {
+            "ok": True,
+            "analysis": serialize_visit_analysis(row, include_sources=True),
+            "version": APP_VERSION,
+        }
+    )
+
+
 @app.get("/api/status")
 def api_status():
     db = get_db()
     months = list_months(db)
     total = db.execute("SELECT COUNT(*) FROM monthly_revenue").fetchone()[0]
+    n_analysis = 0
+    try:
+        n_analysis = db.execute("SELECT COUNT(*) FROM visit_analysis").fetchone()[0]
+    except sqlite3.OperationalError:
+        pass
     return jsonify(
         {
             "version": APP_VERSION,
@@ -1618,8 +2994,10 @@ def api_status():
             "db_exists": DB_PATH.exists(),
             "db_size_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
             "total_rows": total,
+            "visit_analysis_rows": n_analysis,
             "months": months,
             "apis": API_URLS,
+            "analysis_config": analysis_config_status(),
             "features": [
                 "fill-month",
                 "backfill_plan",
@@ -1630,15 +3008,28 @@ def api_status():
                 "signals.csv",
                 "price",
                 "quotes/refresh",
+                "analysis/run",
+                "analysis/weights",
+                "analysis/batch/start",
+                "analysis/job",
+                "analysis",
+                "trend/run",
+                "trend",
+                "ranking",
             ],
             "quote_as_of": price_service.quote_as_of,
             "quote_count": len(price_service.quotes),
+            "company_count": len(company_service.by_code),
+            "company_with_website": sum(
+                1 for v in company_service.by_code.values() if v.get("website")
+            ),
             "api_routes": sorted(
                 r.rule for r in app.url_map.iter_rules() if str(r.rule).startswith("/api")
             ),
             "note": (
                 "OpenAPI 僅最新月；歷史可用「回補 24 個月」（逐月 fill-month）。"
                 "Long PEAD：極端成長 + S1/S2 驚喜轉折（只做多）。"
+                "訪問分析：Brave+Firecrawl+GLM 權重寫入 DB。"
                 "請用本程式開啟的網址，勿用 Live Server 直接開 HTML。"
             ),
         }
@@ -1650,6 +3041,15 @@ def main() -> None:
     import socket
 
     init_db()
+    # 清掉上次殘留的 job 狀態，避免前端誤以為「還在跑」
+    try:
+        live = DATA_DIR / "job_live.json"
+        if live.is_file():
+            live.unlink()
+        with job_progress._lock:  # noqa: SLF001
+            job_progress._job = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
     host = os.environ.get("HOST", "127.0.0.1")
     # 本機預設 5051（5050 常被舊行程佔用造成「有網頁但 API 404」）
     port = int(os.environ.get("PORT", "5051"))
@@ -1694,7 +3094,8 @@ def main() -> None:
         sorted(r.rule for r in app.url_map.iter_rules() if str(r.rule).startswith("/api"))
     ))
     # use_reloader=False：避免 debug reloader 再開第二個 process 佔埠
-    app.run(host=host, port=port, debug=True, use_reloader=False)
+    # threaded=True：背景批次分析時前端仍可輪詢 /api/analysis/job
+    app.run(host=host, port=port, debug=True, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":

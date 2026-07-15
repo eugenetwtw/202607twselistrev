@@ -5,16 +5,64 @@
 ## 快速開始
 
 ```bash
-cd /path/to/202607twselistrev
-pip3 install -r requirements.txt
-python3 app.py
+./start.sh
 ```
 
-開啟 <http://127.0.0.1:5051>（預設埠；也可用 `PORT=5050 python3 app.py`）
+第一次會自動建立 `.venv`、安裝依賴並啟動；之後同一指令即可。
+
+開啟 <http://127.0.0.1:5051>（預設埠；也可用 `PORT=5050 ./start.sh`）
 
 1. 按 **回補 24 個月歷史**（首次建議；約數分鐘）
 2. 或 **抓取最新營收**（OpenAPI + 缺邊用 MOPS 補齊）
 3. 在 **做多異常** 分頁看 E／S 名單，可下載 CSV
+
+### 常用選項
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `PORT` | `5051` | 監聽埠 |
+| `HOST` | `127.0.0.1` | 綁定位址（對外可設 `0.0.0.0`） |
+| `OPEN_BROWSER` | `1` | 設 `0` 則不自動開瀏覽器 |
+| `TWSE_KILL_PORT` | `1` | 埠被佔用時是否結束舊行程 |
+
+範例：
+
+```bash
+PORT=8080 OPEN_BROWSER=0 ./start.sh
+HOST=0.0.0.0 ./start.sh
+```
+
+手動方式（不經腳本）：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+`./run.sh` 等同 `./start.sh`。
+
+### 訪問分析（GLM + Brave + Firecrawl）
+
+在 Long PEAD 名單列上按 **訪問分析**（每次呼叫會重新搜尋網頁並寫入 DB，含時間戳）：
+
+| 權重 | 意義 |
+|------|------|
+| PEAD 權重 | 月營收訊號有多像「可延續的 PEAD 驚喜」（建設交屋、影視一次性事件等會被降權） |
+| 供應鏈權重 | 是否在近期走強之美股 S&P/Nasdaq 電子／AI 供應鏈 |
+| 綜合權重 | 兩者綜合可操作權重 |
+
+金鑰放在本機 `.env`（見 `.env.example`，勿提交 git）：
+
+```
+GLM_API_KEY=…
+BRAVE_API_KEY=…
+FIRECRAWL_API_KEY=…
+GLM_MODEL=glm-4.6
+```
+
+完整報告在第三分頁 **訪問分析報告**；名單上另有權重欄與評估摘要。
 
 ## 資料來源
 
@@ -58,8 +106,12 @@ python3 app.py
 ## 專案結構
 
 ```
+start.sh              # 一鍵啟動（venv + 依賴 + 網頁）
+run.sh                # start.sh 別名
 app.py
+analysis_service.py   # Brave + Firecrawl + GLM 訪問分析
 templates/index.html
 requirements.txt
-data/revenue.db   # 本機產生，不進 git
+.env                  # 本機 API 金鑰（不進 git）
+data/revenue.db       # 本機產生，不進 git
 ```
